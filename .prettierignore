@@ -1,0 +1,10 @@
+node_modules
+.next
+src/generated
+package-lock.json
+coverage
+playwright-report
+test-results
+
+# Next.js generates and owns this file; do not reformat it.
+next-env.d.ts

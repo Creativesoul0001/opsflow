@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. Tailwind v4 reads these as first-class theme variables, so
+ * utility classes such as `bg-surface` and `text-fg-muted` resolve here.
+ */
+@theme {
+  --color-canvas: oklch(99% 0.002 250);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-muted: oklch(97% 0.003 250);
+  --color-border-subtle: oklch(91% 0.005 250);
+  --color-fg: oklch(24% 0.02 260);
+  --color-fg-muted: oklch(52% 0.015 260);
+  --color-brand: oklch(52% 0.17 258);
+  --color-brand-hover: oklch(46% 0.17 258);
+  --color-brand-soft: oklch(96% 0.02 258);
+  --color-danger: oklch(55% 0.19 25);
+  --color-danger-soft: oklch(96% 0.03 25);
+  --color-warning: oklch(70% 0.15 75);
+  --color-success: oklch(58% 0.14 155);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border-subtle);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Keyboard focus must always be visible; we never remove outlines. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+}

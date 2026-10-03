@@ -1,0 +1,123 @@
+// OpsFlow schema — Phase 1 foundation.
+//
+// Design notes:
+//  * Every tenant-owned row hangs off `Organization` through
+//    `OrganizationMembership`. Future business tables (Customers, Orders,
+//    Inventory, Support, Finance, ...) must carry `organizationId` and MUST
+//    never be queried without a verified membership scope.
+//  * `Role` and `Permission` are global reference data, seeded by
+//    `prisma/seed.ts`. They are not tenant-owned so that role definitions stay
+//    consistent across every organization.
+//  * IDs use UUIDv7: globally unique without coordination, and time-ordered so
+//    index locality stays good as the tables grow.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+model User {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  email        String     @unique
+  name         String
+  passwordHash String     @map("password_hash")
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  memberships OrganizationMembership[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model Organization {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships OrganizationMembership[]
+
+  @@map("organizations")
+}
+
+model Role {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  key         String  @unique
+  name        String
+  description String
+  /// System roles are seeded and cannot be repurposed or deleted by tenants.
+  isSystem    Boolean @default(true) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  permissions RolePermission[]
+  memberships OrganizationMembership[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(uuid(7)) @db.Uuid
+  /// Canonical `resource:action` key, e.g. `orders:write`.
+  key         String @unique
+  resource    String
+  action      String
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model OrganizationMembership {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  roleId         String           @map("role_id") @db.Uuid
+  status         MembershipStatus @default(ACTIVE)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  /// A user holds at most one role per organization.
+  @@unique([userId, organizationId])
+  @@index([organizationId, status])
+  @@index([roleId])
+  @@map("organization_memberships")
+}

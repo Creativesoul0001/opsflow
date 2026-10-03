@@ -1,0 +1,43 @@
+# Development infrastructure for OpsFlow.
+#
+# Postgres is required to run the app. Redis is provisioned but not consumed
+# yet: Phase 2 introduces background jobs and will swap the in-memory rate-limit
+# store and the job queue over to it.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: opsflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opsflow
+      POSTGRES_PASSWORD: opsflow_dev_password
+      POSTGRES_DB: opsflow
+      # Deterministic collation keeps index behaviour identical across hosts.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U opsflow -d opsflow']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    container_name: opsflow-redis
+    restart: unless-stopped
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
