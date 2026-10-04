@@ -42,7 +42,14 @@ export function RegisterForm() {
   }
 
   return (
-    <form onSubmit={(event) => void onSubmit(event)} noValidate className="space-y-4">
+    // `method="post"` is a deliberate fallback. When React's submit handler is
+    // attached it calls preventDefault and nothing changes, but if hydration has
+    // not completed (slow connection, a blocked bundle, or a browser extension
+    // that mutates the DOM before React runs) the browser would fall back to its
+    // native behaviour — a GET, which appends the password to the URL and leaks
+    // it into history, logs and Referer headers. A native POST keeps the
+    // credentials in the body, where they belong.
+    <form method="post" onSubmit={(event) => void onSubmit(event)} noValidate className="space-y-4">
       {formError ? <Alert tone="error">{formError}</Alert> : null}
 
       <TextField

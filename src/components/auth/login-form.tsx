@@ -42,7 +42,9 @@ export function LoginForm() {
   }
 
   return (
-    <form onSubmit={(event) => void onSubmit(event)} noValidate className="space-y-4">
+    // See RegisterForm: `method="post"` is a fallback that stops a pre-hydration
+    // native submit from turning the password into a URL parameter.
+    <form method="post" onSubmit={(event) => void onSubmit(event)} noValidate className="space-y-4">
       {formError ? <Alert tone="error">{formError}</Alert> : null}
 
       <TextField

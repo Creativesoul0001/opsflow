@@ -4,7 +4,11 @@ import { cache } from 'react';
 
 import { auth } from '@/lib/auth/config';
 import { AuthenticationError } from '@/lib/api/errors';
-import { defaultOrganizationId, loadAuthorizationContext } from '@/lib/tenancy';
+import {
+  defaultOrganizationId,
+  loadAuthorizationContext,
+  requireMembership,
+} from '@/lib/tenancy';
 import type { AuthorizationContext } from '@/lib/rbac/guard';
 
 export interface SessionUser {
@@ -49,3 +53,25 @@ export const getAuthorizationContext = cache(async (): Promise<AuthorizationCont
   const organizationId = await defaultOrganizationId(user.id);
   return loadAuthorizationContext(user, organizationId);
 });
+
+/**
+ * The verified authorization context for a JSON endpoint.
+ *
+ * The tenant is derived from the caller's ACTIVE membership, never from the
+ * request body. A client may pass `?organizationId=` to select among the
+ * organizations it belongs to, but `requireMembership` re-checks that id against
+ * Postgres, so an id for someone else's organization is rejected with 403 instead
+ * of switching the request to that tenant.
+ */
+export async function requireApiContext(request: Request): Promise<AuthorizationContext> {
+  const user = await requireSessionUser();
+
+  const requested = new URL(request.url).searchParams.get('organizationId');
+  if (requested) {
+    const membership = await requireMembership(user, requested);
+    return loadAuthorizationContext(user, membership.organizationId);
+  }
+
+  const organizationId = await defaultOrganizationId(user.id);
+  return loadAuthorizationContext(user, organizationId);
+}

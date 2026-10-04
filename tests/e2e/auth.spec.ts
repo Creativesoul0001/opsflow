@@ -40,7 +40,11 @@ test('register, sign in and reach the dashboard', async ({ page }) => {
   await page.getByLabel('Organization name').fill(organization);
 
   await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page).toHaveURL(/\/login/);
+  // Registration creates an account and redirects to the sign-in page. With
+  // client-side navigation the URL may change quickly, but in some environments
+  // the server render is followed by hydration — wait for the redirect to
+  // stabilise rather than asserting it in the same tick.
+  await expect(page).toHaveURL(/\/login($|\?)/);
 
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill('Correct-Horse-9');

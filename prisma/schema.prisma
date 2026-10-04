@@ -1,8 +1,8 @@
-// OpsFlow schema — Phase 1 foundation.
+// OpsFlow schema — Phase 1 foundation, Phase 2 CRM (Customers).
 //
 // Design notes:
 //  * Every tenant-owned row hangs off `Organization` through
-//    `OrganizationMembership`. Future business tables (Customers, Orders,
+//    `OrganizationMembership`. Business tables (Customers, Orders,
 //    Inventory, Support, Finance, ...) must carry `organizationId` and MUST
 //    never be queried without a verified membership scope.
 //  * `Role` and `Permission` are global reference data, seeded by
@@ -31,6 +31,28 @@ enum MembershipStatus {
   SUSPENDED
 }
 
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  LEAD
+  ARCHIVED
+}
+
+enum CustomerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+/// Phase 2 CRM audit trail. Activities are written as a side effect of real
+/// operations rather than posted directly, so the timeline cannot be forged.
+enum CustomerActivityType {
+  CREATED
+  UPDATED
+  NOTE_ADDED
+  ASSIGNED
+  ARCHIVED
+}
+
 model User {
   id           String     @id @default(uuid(7)) @db.Uuid
   email        String     @unique
@@ -41,7 +63,9 @@ model User {
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
-  memberships OrganizationMembership[]
+  memberships        OrganizationMembership[]
+  assignedCustomers  Customer[]               @relation("CustomerAssignee")
+  customerActivities CustomerActivity[]
 
   @@index([status])
   @@map("users")
@@ -54,18 +78,20 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships OrganizationMembership[]
+  memberships        OrganizationMembership[]
+  customers          Customer[]
+  customerActivities CustomerActivity[]
 
   @@map("organizations")
 }
 
 model Role {
-  id          String  @id @default(uuid(7)) @db.Uuid
-  key         String  @unique
+  id          String   @id @default(uuid(7)) @db.Uuid
+  key         String   @unique
   name        String
   description String
   /// System roles are seeded and cannot be repurposed or deleted by tenants.
-  isSystem    Boolean @default(true) @map("is_system")
+  isSystem    Boolean  @default(true) @map("is_system")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -76,9 +102,9 @@ model Role {
 }
 
 model Permission {
-  id          String @id @default(uuid(7)) @db.Uuid
+  id          String   @id @default(uuid(7)) @db.Uuid
   /// Canonical `resource:action` key, e.g. `orders:write`.
-  key         String @unique
+  key         String   @unique
   resource    String
   action      String
   description String
@@ -120,4 +146,67 @@ model OrganizationMembership {
   @@index([organizationId, status])
   @@index([roleId])
   @@map("organization_memberships")
+}
+
+/// A CRM customer record. Always owned by exactly one organization.
+///
+/// Archiving is the removal mechanism: `archivedAt` is set and `status` becomes
+/// `ARCHIVED`, so history and the activity trail survive. There is no hard
+/// delete path in the API.
+model Customer {
+  id             String         @id @default(uuid(7)) @db.Uuid
+  organizationId String         @map("organization_id") @db.Uuid
+  firstName      String         @map("first_name")
+  lastName       String         @map("last_name")
+  email          String
+  phone          String?
+  companyName    String?        @map("company_name")
+  status         CustomerStatus @default(ACTIVE)
+  customerType   CustomerType   @default(INDIVIDUAL) @map("customer_type")
+  /// Assignee. Null means unassigned. Must be an ACTIVE member of the same
+  /// organization — `users` is global, so the service layer verifies this.
+  assignedUserId String?        @map("assigned_user_id") @db.Uuid
+  notes          String?
+  archivedAt     DateTime?      @map("archived_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedUser User?              @relation("CustomerAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  activities   CustomerActivity[]
+
+  /// One record per email address per organization. Emails are deliberately not
+  /// globally unique: the same person can legitimately be a customer of two
+  /// different organizations.
+  @@unique([organizationId, email])
+  @@index([organizationId, archivedAt])
+  @@index([organizationId, status])
+  @@index([organizationId, customerType])
+  @@index([organizationId, assignedUserId])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, lastName, firstName])
+  @@map("customers")
+}
+
+/// Append-only audit trail powering the customer timeline.
+///
+/// `userId` is nullable with `onDelete: SetNull` so history survives the removal
+/// of the member who performed the action.
+model CustomerActivity {
+  id             String               @id @default(uuid(7)) @db.Uuid
+  organizationId String               @map("organization_id") @db.Uuid
+  customerId     String               @map("customer_id") @db.Uuid
+  userId         String?              @map("user_id") @db.Uuid
+  type           CustomerActivityType
+  description    String
+  createdAt      DateTime             @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Serves the timeline query, which is always tenant- and customer-scoped.
+  @@index([customerId, createdAt])
+  @@index([organizationId, createdAt])
+  @@map("customer_activities")
 }

@@ -108,7 +108,7 @@ interface PrismaLikeError {
   meta?: { target?: unknown; field_name?: unknown };
 }
 
-function isPrismaLikeError(error: unknown): error is PrismaLikeError {
+export function isPrismaLikeError(error: unknown): error is PrismaLikeError {
   return (
     typeof error === 'object' &&
     error !== null &&

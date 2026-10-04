@@ -6,15 +6,20 @@
  * these keys, and the backend checks keys — never role names — so role
  * assignments can change without touching feature code.
  *
- * Phase 1 ships the full vocabulary for the planned modules so that adding a
- * module in a later phase is a matter of granting existing keys.
+ * Phase 1 shipped the full vocabulary for the planned modules, so building a
+ * module in a later phase is mostly a matter of granting existing keys. Phase 2
+ * (CRM) refined `customers` from a coarse read/write/delete trio into
+ * `read`/`create`/`update`/`archive`/`assign` so archiving and assignment can be
+ * withheld independently of ordinary editing.
  */
 export const PERMISSIONS = {
   DASHBOARD_READ: 'dashboard:read',
 
   CUSTOMERS_READ: 'customers:read',
-  CUSTOMERS_WRITE: 'customers:write',
-  CUSTOMERS_DELETE: 'customers:delete',
+  CUSTOMERS_CREATE: 'customers:create',
+  CUSTOMERS_UPDATE: 'customers:update',
+  CUSTOMERS_ARCHIVE: 'customers:archive',
+  CUSTOMERS_ASSIGN: 'customers:assign',
 
   ORDERS_READ: 'orders:read',
   ORDERS_WRITE: 'orders:write',
@@ -72,16 +77,28 @@ export const PERMISSION_CATALOG: readonly {
     description: 'View customers',
   },
   {
-    key: PERMISSIONS.CUSTOMERS_WRITE,
+    key: PERMISSIONS.CUSTOMERS_CREATE,
     resource: 'customers',
-    action: 'write',
-    description: 'Create and update customers',
+    action: 'create',
+    description: 'Create customers',
   },
   {
-    key: PERMISSIONS.CUSTOMERS_DELETE,
+    key: PERMISSIONS.CUSTOMERS_UPDATE,
     resource: 'customers',
-    action: 'delete',
-    description: 'Delete customers',
+    action: 'update',
+    description: 'Update customer information',
+  },
+  {
+    key: PERMISSIONS.CUSTOMERS_ARCHIVE,
+    resource: 'customers',
+    action: 'archive',
+    description: 'Archive customers',
+  },
+  {
+    key: PERMISSIONS.CUSTOMERS_ASSIGN,
+    resource: 'customers',
+    action: 'assign',
+    description: 'Assign customers to a team member',
   },
 
   { key: PERMISSIONS.ORDERS_READ, resource: 'orders', action: 'read', description: 'View orders' },

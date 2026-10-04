@@ -25,8 +25,7 @@ export const MODULES = [
     label: 'Customers',
     href: '/customers',
     permission: PERMISSIONS.CUSTOMERS_READ,
-    status: 'planned',
-    phase: 2,
+    status: 'available',
     summary: 'Customer records, segments and contact history.',
   },
   {

@@ -34,14 +34,20 @@ export function formString(form: FormData, name: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-export async function postJson<T>(
-  url: string,
-  body: unknown,
-): Promise<{ data: T; status: number }> {
+/**
+ * Performs a JSON request and unwraps the `{ data }` envelope.
+ *
+ * Field-level validation issues from a 422 are mapped onto `fieldErrors` so
+ * forms can render them inline; any other failure throws an `ApiRequestError`
+ * carrying only the safe server message.
+ */
+async function requestJson<T>(url: string, init: RequestInit): Promise<{ data: T; status: number }> {
   const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    ...init,
+    headers: {
+      ...(init.body ? { 'content-type': 'application/json' } : {}),
+      ...init.headers,
+    },
   });
 
   let payload: unknown = null;
@@ -74,4 +80,21 @@ export async function postJson<T>(
     error?.code ?? 'UNKNOWN',
     fieldErrors,
   );
+}
+
+export function getJson<T>(url: string): Promise<{ data: T; status: number }> {
+  return requestJson<T>(url, { method: 'GET' });
+}
+
+export function postJson<T>(url: string, body: unknown): Promise<{ data: T; status: number }> {
+  return requestJson<T>(url, { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function patchJson<T>(url: string, body: unknown): Promise<{ data: T; status: number }> {
+  return requestJson<T>(url, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+/** Used by the archive action; `DELETE` still returns the archived record. */
+export function deleteJson<T>(url: string): Promise<{ data: T; status: number }> {
+  return requestJson<T>(url, { method: 'DELETE' });
 }

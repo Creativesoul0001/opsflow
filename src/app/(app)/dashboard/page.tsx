@@ -2,8 +2,10 @@ import { TrendPanel } from '@/components/dashboard/trend-panel';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { getAuthorizationContext } from '@/lib/auth/session';
-import { assertPermission } from '@/lib/rbac/guard';
+import { formatCount } from '@/lib/customers/presentation';
+import { assertPermission, hasPermission } from '@/lib/rbac/guard';
 import { PERMISSIONS } from '@/lib/rbac/permissions';
+import { getCustomerStats } from '@/lib/services/customer.service';
 
 export const metadata = { title: 'Dashboard' };
 
@@ -16,6 +18,12 @@ export default async function DashboardPage() {
 
   const firstName = context!.name.split(' ')[0] ?? context!.name;
 
+  // Customer counts come from Postgres, scoped to this organization by the
+  // service. A member without customer access sees placeholders rather than a
+  // number they are not entitled to.
+  const canReadCustomers = hasPermission(context!, PERMISSIONS.CUSTOMERS_READ);
+  const stats = canReadCustomers ? await getCustomerStats(context!) : null;
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <header>
@@ -27,9 +35,42 @@ export default async function DashboardPage() {
 
       <section aria-label="Key metrics">
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {stats ? (
+            <>
+              <StatCard
+                label="Total customers"
+                description="Everyone in your organization."
+                value={formatCount(stats.total)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Active customers"
+                description="Currently ACTIVE."
+                value={formatCount(stats.active)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="New customers"
+                description="Added in the last 30 days."
+                value={formatCount(stats.newLast30Days)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Archived customers"
+                description="Hidden from the default list."
+                value={formatCount(stats.archived)}
+                isPlaceholder={false}
+              />
+            </>
+          ) : (
+            <StatCard
+              label="Customers"
+              description="Requires the customers:read permission."
+            />
+          )}
+
           <StatCard label="Revenue" description="Requires the Finance module." />
           <StatCard label="Orders" description="Requires the Orders module." />
-          <StatCard label="Customers" description="Requires the Customers module." />
           <StatCard label="Open tickets" description="Requires the Support module." />
         </div>
       </section>
@@ -40,13 +81,17 @@ export default async function DashboardPage() {
         </div>
 
         <Card>
-          <CardHeader title="Getting started" description="Phase 1 is the platform foundation." />
+          <CardHeader
+            title="Getting started"
+            description="Phase 2 delivered the CRM foundation."
+          />
           <CardBody className="space-y-4 text-sm">
             <ul className="text-fg-muted space-y-2.5">
               {[
                 'Your account, organization and role are set up.',
-                'Business metrics appear as each module ships.',
-                'Access is scoped to this organization only.',
+                'Customers are searchable, filterable and archived rather than deleted.',
+                'Every change is recorded on the customer timeline.',
+                'Other modules report metrics as each phase ships.',
               ].map((item) => (
                 <li key={item} className="flex gap-2">
                   <span

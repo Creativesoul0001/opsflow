@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef } from 'react';
+import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 
 export interface FieldProps {
   label: string;
@@ -81,5 +81,69 @@ export function TextArea({
         </p>
       ) : null}
     </div>
+  );
+}
+
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Native `<select>`, styled to match `TextField`.
+ *
+ * A native control is deliberate: it gets keyboard behaviour, screen-reader
+ * semantics and mobile pickers for free, and needs no JavaScript to operate.
+ */
+export function SelectField({
+  label,
+  name,
+  error,
+  hint,
+  options,
+  ...props
+}: FieldProps & { options: readonly SelectOption[] } & ComponentPropsWithoutRef<'select'>) {
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={name} className="text-fg block text-sm font-medium">
+        {label}
+      </label>
+      <select
+        id={name}
+        name={name}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(name, error, hint)}
+        className={`${inputClasses(Boolean(error))} appearance-none bg-none`}
+        {...props}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {hint && !error ? (
+        <p id={`${name}-hint`} className="text-fg-muted text-xs">
+          {hint}
+        </p>
+      ) : null}
+      {error ? (
+        <p id={`${name}-error`} className="text-danger text-xs">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Groups related fields with a heading, e.g. "Contact details". */
+export function FieldSet({ legend, children }: { legend: string; children: ReactNode }) {
+  return (
+    <fieldset className="space-y-4">
+      <legend className="text-fg-muted text-xs font-semibold tracking-wide uppercase">
+        {legend}
+      </legend>
+      {children}
+    </fieldset>
   );
 }

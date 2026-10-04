@@ -42,6 +42,20 @@ async function main(): Promise<void> {
   }
   console.log(`  ${PERMISSION_CATALOG.length} permissions ensured.`);
 
+  // Prune permissions that left the catalogue. Renaming or splitting a permission
+  // (as Phase 2 did for `customers:write` / `customers:delete`) otherwise leaves
+  // an orphan row behind forever. Grant rows cascade, so revoking the permission
+  // also revokes it from every role.
+  //
+  // The catalogue is the source of truth for what this build can authorize, so a
+  // key that is no longer in it can no longer be granted through any code path.
+  const stale = await prisma.permission.deleteMany({
+    where: { key: { notIn: PERMISSION_CATALOG.map((permission) => permission.key) } },
+  });
+  if (stale.count > 0) {
+    console.log(`  ${stale.count} obsolete permissions removed.`);
+  }
+
   // Resolve every referenced key to an id in one query instead of N lookups.
   const permissions = await prisma.permission.findMany({ select: { id: true, key: true } });
   const idByKey = new Map(permissions.map((p) => [p.key, p.id]));

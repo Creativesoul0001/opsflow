@@ -21,7 +21,10 @@ export interface RoleDefinition {
 const { SETTINGS_READ } = PERMISSIONS;
 const {
   CUSTOMERS_READ,
-  CUSTOMERS_WRITE,
+  CUSTOMERS_CREATE,
+  CUSTOMERS_UPDATE,
+  CUSTOMERS_ARCHIVE,
+  CUSTOMERS_ASSIGN,
   ORDERS_READ,
   ORDERS_WRITE,
   INVENTORY_READ,
@@ -65,7 +68,10 @@ export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
     permissions: [
       DASHBOARD_READ,
       CUSTOMERS_READ,
-      CUSTOMERS_WRITE,
+      CUSTOMERS_CREATE,
+      CUSTOMERS_UPDATE,
+      CUSTOMERS_ARCHIVE,
+      CUSTOMERS_ASSIGN,
       ORDERS_READ,
       ORDERS_WRITE,
       INVENTORY_READ,
@@ -82,11 +88,14 @@ export const ROLE_DEFINITIONS: readonly RoleDefinition[] = [
   {
     key: ROLES.EMPLOYEE,
     name: 'Employee',
-    description: 'Day-to-day access to customers, orders and support. Read-only elsewhere.',
+    description:
+      'Day-to-day access to customers, orders and support. Can create and edit customers but cannot archive them, reassign them, or touch anything administrative.',
     isAdministrative: false,
     permissions: [
       DASHBOARD_READ,
       CUSTOMERS_READ,
+      CUSTOMERS_CREATE,
+      CUSTOMERS_UPDATE,
       ORDERS_READ,
       INVENTORY_READ,
       SUPPORT_READ,

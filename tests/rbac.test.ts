@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { AuthorizationError } from '@/lib/api/errors';
-import { ALL_PERMISSIONS, PERMISSIONS, isPermission } from '@/lib/rbac/permissions';
+import {
+  ALL_PERMISSIONS,
+  PERMISSION_CATALOG,
+  PERMISSIONS,
+  isPermission,
+} from '@/lib/rbac/permissions';
 import {
   ROLE_DEFINITIONS,
   ROLES,
@@ -95,10 +100,11 @@ describe('privilege hierarchy', () => {
 
   it('restricts EMPLOYEE to read-only access outside support', () => {
     const employee = new Set(permissionsForRole(ROLES.EMPLOYEE));
-    expect(employee.has(PERMISSIONS.CUSTOMERS_WRITE)).toBe(false);
     expect(employee.has(PERMISSIONS.ORDERS_WRITE)).toBe(false);
     expect(employee.has(PERMISSIONS.FINANCE_READ)).toBe(false);
     expect(employee.has(PERMISSIONS.CUSTOMERS_READ)).toBe(true);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_CREATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_UPDATE)).toBe(true);
   });
 
   it('marks only OWNER and ADMIN as administrative', () => {
@@ -107,6 +113,54 @@ describe('privilege hierarchy', () => {
         .map((r) => r.key)
         .sort(),
     ).toEqual(['ADMIN', 'OWNER']);
+  });
+});
+
+/**
+ * Phase 2 replaced the coarse `customers:write` / `customers:delete` pair with
+ * per-action permissions so archiving and assigning can be withheld without
+ * blocking ordinary editing. These tests pin that split.
+ */
+describe('customer permission granularity', () => {
+  const CUSTOMER_PERMISSIONS = [
+    PERMISSIONS.CUSTOMERS_READ,
+    PERMISSIONS.CUSTOMERS_CREATE,
+    PERMISSIONS.CUSTOMERS_UPDATE,
+    PERMISSIONS.CUSTOMERS_ARCHIVE,
+    PERMISSIONS.CUSTOMERS_ASSIGN,
+  ];
+
+  it('no longer defines the coarse write/delete keys', () => {
+    const keys = PERMISSION_CATALOG.map((permission) => permission.key);
+
+    expect(keys).not.toContain('customers:write');
+    expect(keys).not.toContain('customers:delete');
+  });
+
+  it('defines exactly the five customer permissions', () => {
+    const keys = PERMISSION_CATALOG.filter((p) => p.resource === 'customers').map((p) => p.key);
+
+    expect(keys.sort()).toEqual([...CUSTOMER_PERMISSIONS].sort());
+  });
+
+  it('gives OWNER, ADMIN and MANAGER every customer permission', () => {
+    for (const role of [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER]) {
+      const granted = new Set(permissionsForRole(role));
+
+      for (const permission of CUSTOMER_PERMISSIONS) {
+        expect(granted.has(permission), `${role} lacks ${permission}`).toBe(true);
+      }
+    }
+  });
+
+  it('lets EMPLOYEE manage customers but not archive or assign them', () => {
+    const employee = new Set(permissionsForRole(ROLES.EMPLOYEE));
+
+    expect(employee.has(PERMISSIONS.CUSTOMERS_READ)).toBe(true);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_CREATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_UPDATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_ARCHIVE)).toBe(false);
+    expect(employee.has(PERMISSIONS.CUSTOMERS_ASSIGN)).toBe(false);
   });
 });
 
@@ -131,7 +185,7 @@ describe('permission guards', () => {
     expect(() => assertPermission(owner, PERMISSIONS.ORGANIZATION_DELETE)).not.toThrow();
 
     const employee = contextFor(ROLES.EMPLOYEE);
-    expect(() => assertPermission(employee, PERMISSIONS.CUSTOMERS_DELETE)).toThrow(
+    expect(() => assertPermission(employee, PERMISSIONS.CUSTOMERS_ARCHIVE)).toThrow(
       AuthorizationError,
     );
   });
@@ -142,10 +196,10 @@ describe('permission guards', () => {
       hasEveryPermission(employee, [PERMISSIONS.CUSTOMERS_READ, PERMISSIONS.ORDERS_READ]),
     ).toBe(true);
     expect(
-      hasEveryPermission(employee, [PERMISSIONS.CUSTOMERS_READ, PERMISSIONS.CUSTOMERS_WRITE]),
+      hasEveryPermission(employee, [PERMISSIONS.CUSTOMERS_READ, PERMISSIONS.CUSTOMERS_ARCHIVE]),
     ).toBe(false);
     expect(
-      hasSomePermission(employee, [PERMISSIONS.CUSTOMERS_WRITE, PERMISSIONS.CUSTOMERS_READ]),
+      hasSomePermission(employee, [PERMISSIONS.CUSTOMERS_ARCHIVE, PERMISSIONS.CUSTOMERS_READ]),
     ).toBe(true);
     expect(hasSomePermission(employee, [PERMISSIONS.FINANCE_READ])).toBe(false);
   });
