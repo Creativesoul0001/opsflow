@@ -151,7 +151,9 @@ export interface OrderStats {
   total: number;
   open: number;
   pending: number;
+  processing: number;
   shipped: number;
+  delivered: number;
   cancelled: number;
   /** Sum of `total` for every order that was not cancelled, in major units. */
   revenue: string;
@@ -854,30 +856,35 @@ export async function getOrderStats(context: AuthorizationContext): Promise<Orde
   const organizationId = context.organizationId;
   const since = new Date(Date.now() - NEW_ORDER_WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
-  const [total, open, pending, shipped, cancelled, revenue, newLast30Days] = await db.$transaction([
-    db.order.count({ where: { organizationId } }),
-    // Still being worked on: not cancelled and not yet delivered.
-    db.order.count({
-      where: {
-        organizationId,
-        status: { notIn: [OrderStatus.CANCELLED, OrderStatus.DELIVERED] },
-      },
-    }),
-    db.order.count({ where: { organizationId, status: OrderStatus.PENDING } }),
-    db.order.count({ where: { organizationId, status: OrderStatus.SHIPPED } }),
-    db.order.count({ where: { organizationId, status: OrderStatus.CANCELLED } }),
-    db.order.aggregate({
-      where: { organizationId, status: { not: OrderStatus.CANCELLED } },
-      _sum: { total: true },
-    }),
-    db.order.count({ where: { organizationId, createdAt: { gte: since } } }),
-  ]);
+  const [total, open, pending, processing, shipped, delivered, cancelled, revenue, newLast30Days] =
+    await db.$transaction([
+      db.order.count({ where: { organizationId } }),
+      // Still being worked on: not cancelled and not yet delivered.
+      db.order.count({
+        where: {
+          organizationId,
+          status: { notIn: [OrderStatus.CANCELLED, OrderStatus.DELIVERED] },
+        },
+      }),
+      db.order.count({ where: { organizationId, status: OrderStatus.PENDING } }),
+      db.order.count({ where: { organizationId, status: OrderStatus.PROCESSING } }),
+      db.order.count({ where: { organizationId, status: OrderStatus.SHIPPED } }),
+      db.order.count({ where: { organizationId, status: OrderStatus.DELIVERED } }),
+      db.order.count({ where: { organizationId, status: OrderStatus.CANCELLED } }),
+      db.order.aggregate({
+        where: { organizationId, status: { not: OrderStatus.CANCELLED } },
+        _sum: { total: true },
+      }),
+      db.order.count({ where: { organizationId, createdAt: { gte: since } } }),
+    ]);
 
   return {
     total,
     open,
     pending,
+    processing,
     shipped,
+    delivered,
     cancelled,
     revenue: minor(revenue._sum.total ?? 0),
     newLast30Days,

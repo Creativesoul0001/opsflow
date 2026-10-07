@@ -1,15 +1,19 @@
 # OpsFlow
 
-**Phase 1 — platform foundation.**
+**Phase 3 — Customers CRM and Orders.**
 
 OpsFlow is a multi-tenant business operations SaaS: a single platform for
 managing customers, orders, inventory, support, finance, analytics and
 automation, with every record scoped to the organization that owns it.
 
-This repository currently contains **Phase 1 only**: the production-grade
-foundation — database schema, authentication, role-based authorization,
-a consistent REST API, an application shell and the test/lint/build
-toolchain. The business modules are intentionally _not_ implemented yet.
+This repository contains **Phases 1–3**: the production-grade foundation
+(database schema, authentication, role-based authorization, a consistent REST
+API, an application shell and the test/lint/build toolchain), the **Customers**
+CRM module and the **Orders** module. Both modules are fully implemented —
+every record is scoped to the owning organization, served through
+permission-checked REST APIs, and presented in the shell with list, detail and
+create/edit pages. The remaining modules (settings, inventory, support,
+finance, analytics, automation, AI) are not implemented yet.
 
 ---
 
@@ -41,7 +45,7 @@ Browser
 Next.js App Router
   ├─ (auth)  /login  /register          → public, REST-backed auth forms
   ├─ (app)   /dashboard + module pages  → server-rendered, session required
-  └─ api/    /api/health /api/me /api/auth/*
+  └─ api/    /api/health /api/me /api/auth/* /api/customers/* /api/orders/*
         │
         ▼
 Route handlers (thin)                     src/app/api/**
@@ -82,11 +86,13 @@ including the multi-tenancy model and request flow.
 │   ├── app/
 │   │   ├── (auth)/            # /login, /register  (public)
 │   │   ├── (app)/             # /dashboard + module pages (protected)
-│   │   └── api/               # REST route handlers
+│   │   └── api/               # REST route handlers (thin: parse → guard → delegate)
 │   ├── components/
 │   │   ├── ui/                # Button, Card, Field, Alert, Spinner, states
 │   │   ├── layout/            # AppShell, SidebarNav, UserMenu
 │   │   ├── auth/              # login/register forms
+│   │   ├── customers/         # customer forms, tables, filters, timeline
+│   │   ├── orders/            # order form, table, filters, badges, workflow
 │   │   ├── dashboard/         # StatCard, TrendPanel
 │   │   └── module/            # shared "coming soon" placeholder
 │   ├── generated/prisma/      # Prisma client (git-ignored, generated)
@@ -95,7 +101,8 @@ including the multi-tenancy model and request flow.
 │       ├── auth/              # config.ts, password.ts, session.ts
 │       ├── client/            # client fetch helper + ApiRequestError
 │       ├── rbac/              # permissions.ts, roles.ts, guard.ts
-│       ├── services/          # auth.service.ts, organization.service.ts
+│       ├── services/          # auth, organization, customer, order services
+│       ├── orders/            # money, calculation, status, number, validation, query
 │       ├── db.ts  env.ts  logger.ts  modules.ts  rate-limit.ts  validation.ts
 │       └── tenancy.ts         # membership/authorization resolution
 ├── tests/
@@ -193,7 +200,7 @@ npm run db:seed       # seed permissions + roles (idempotent)
 npm run db:studio     # browse data in Prisma Studio
 ```
 
-### Models (Phase 1)
+### Models (currently live)
 
 - **User** — `email` (unique), `passwordHash`, `status`
 - **Organization** — `name`, `slug` (unique)
@@ -202,6 +209,17 @@ npm run db:studio     # browse data in Prisma Studio
 - **RolePermission** — many-to-many join between roles and permissions
 - **OrganizationMembership** — ties `User ↔ Organization` with one `Role`;
   unique on `(userId, organizationId)`
+- **Customer** — `organizationId` FK + index; contact info and a `status`
+  ACTIVE/ARCHIVED; archiving is a soft-delete (with reason) so history is kept
+- **Order** — `organizationId` FK + index; a per-tenant `order_sequences`
+  counter, unique `(organizationId, orderNumber)` with sequential `ORD-######`
+  numbers; a status lifecycle (Pending → Confirmed → Processing → Shipped →
+  Delivered, or Cancelled); money stored as integer minor units and the tax rate
+  in basis points; totals always derived server-side
+- **OrderItem** — the line items under an order (gross, per-line discount,
+  line total)
+- **OrderActivity** — immutable audit timeline recording creates, edits, status
+  changes, assignments, cancellations and notes
 
 IDs are UUIDv7. Timestamps use `@default(now())` / `@updatedAt` throughout.
 
@@ -232,14 +250,21 @@ IDs are UUIDv7. Timestamps use `@default(now())` / `@updatedAt` throughout.
 
 ## Testing
 
-- **Unit / integration (Vitest)** — `tests/*.test.ts`. Covers validation,
-  RBAC hierarchy + guards, organization access control, error taxonomy and
-  password hashing/log-redaction. No database required; `server-only` is stubbed
-  for the Node test runner.
-- **E2E (Playwright)** — `tests/e2e/auth.spec.ts`. Exercises the register →
-  sign-in → dashboard → sign-out flow. Requires a migrated, seeded database and
-  a running app (`npm run test:e2e`). Kept out of `npm run verify` because it
-  depends on external infrastructure.
+- **Unit / integration (Vitest)** — `tests/*.test.ts`. Covers validation, RBAC
+  hierarchy + guards, tenancy boundaries, error taxonomy, password hashing and
+  log redaction, plus the pure business logic (customer and order
+  money/calculation/status/number/validation/query). The order and customer
+  service suites run against a real Postgres; runs are serialized per file to
+  keep each file on its own pooled connection (see `vitest.config.mts`).
+  `server-only` is stubbed for the Node test runner.
+- **E2E (Playwright)** — `tests/e2e/auth.spec.ts`, `customers.spec.ts` and
+  `orders.spec.ts`. They cover the register → sign-in → dashboard → sign-out
+  flow, a full customer lifecycle (create, search, edit, note, archive) and a
+  full order lifecycle (create with live totals preview, assign, note,
+  search/filter, workflow to delivered, cancellation) plus unauthenticated API
+  refusal. Requires a migrated, seeded database and a running app
+  (`npm run test:e2e`). Kept out of `npm run verify` because it depends on
+  external infrastructure.
 
 ```bash
 npm run test         # unit tests
@@ -248,26 +273,32 @@ npm run verify       # the full gate: typecheck + lint + test + build
 
 ---
 
-## Phase 1 scope (what exists)
+## What exists (Phases 1–3)
 
-- Multi-tenant data model (User → Membership → Organization) with future-ready
-  tenant scoping
-- Auth: registration (creates user + organization + OWNER atomically), login,
-  logout, bcrypt hashing, JWT sessions, protected routes
-- RBAC: 4 roles, 25 permissions, permission-based server-side guards
-- REST foundation: `GET /api/health`, `GET /api/me`, auth endpoints, Zod
-  validation, centralized errors, structured logging, rate limiting
-- Application shell: responsive sidebar/topnav/user menu, loading / error /
-  empty states, an honest dashboard (metrics explicitly "No data yet")
-- Placeholder pages for every planned module, honestly labelled "coming soon"
-- Tooling: strict TS, ESLint, Prettier, Vitest, Playwright, Docker (Postgres +
-  Redis), migrations + seed
+**Phase 1 — foundation:** multi-tenant data model (User → Membership →
+Organization) with tenant scoping; auth (registration, login, logout, bcrypt,
+JWT sessions, protected routes); RBAC (4 roles, 25 permissions, server-side
+guards); REST foundation (health/me/auth endpoints, Zod validation, centralized
+errors, structured logging, rate limiting); application shell with loading /
+error / empty states and an honest dashboard; tooling (strict TS, ESLint,
+Prettier, Vitest, Playwright, Docker, migrations + seed).
+
+**Phase 2 — Customers CRM:** customer CRUD with search, filter, sort and
+pagination; soft archive with reason; a contact timeline (created / updated /
+archived / note) and notes; an order-history card on the customer detail page.
+
+**Phase 3 — Orders:** order create/edit with validated money inputs and totals
+that are always derived server-side; per-organization sequential `ORD-######`
+numbers; a status workflow with two-step cancellation; assignable members and
+notes along an immutable activity timeline; a list with search/filter/sort and
+pagination; a detail page with the line-item table and totals; and dashboard
+order statistics (total, pending, processing, delivered, cancelled, value).
 
 ## Future phases (not implemented)
 
-- **Phase 2** — Customers, Orders, Settings (members, roles, org profile)
-- **Phase 3** — Inventory, Support, Analytics
-- **Phase 4** — Finance, Automation, AI Assistant + background jobs on Redis
+- **Settings** — members, roles, organization profile
+- **Inventory, Support, Finance, Analytics, Automation, AI Assistant**
+  (background jobs will use Redis)
 
 ---
 

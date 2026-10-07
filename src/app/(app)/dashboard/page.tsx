@@ -98,15 +98,27 @@ export default async function DashboardPage() {
                 isPlaceholder={false}
               />
               <StatCard
-                label="Open orders"
-                description="Not yet delivered or cancelled."
-                value={formatCount(orderStats.open)}
+                label="Pending orders"
+                description="Awaiting confirmation."
+                value={formatCount(orderStats.pending)}
                 isPlaceholder={false}
               />
               <StatCard
-                label="Awaiting confirmation"
-                description="Still in PENDING."
-                value={formatCount(orderStats.pending)}
+                label="Processing orders"
+                description="Being fulfilled right now."
+                value={formatCount(orderStats.processing)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Delivered orders"
+                description="Completed and handed over."
+                value={formatCount(orderStats.delivered)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Cancelled orders"
+                description="Called off before delivery."
+                value={formatCount(orderStats.cancelled)}
                 isPlaceholder={false}
               />
               <StatCard

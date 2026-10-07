@@ -791,7 +791,15 @@ describe.skipIf(!ENABLED)('order service (database)', () => {
 
     it('excludes cancelled orders from revenue but not from the total', async () => {
       const statsBefore = await getOrderStats(ownerC);
-      expect(statsBefore).toMatchObject({ total: 0, open: 0, cancelled: 0, revenue: '0.00' });
+      expect(statsBefore).toMatchObject({
+        total: 0,
+        open: 0,
+        pending: 0,
+        processing: 0,
+        delivered: 0,
+        cancelled: 0,
+        revenue: '0.00',
+      });
 
       const first = await createFor(ownerC, customerC, {
         items: [{ productName: 'One', quantity: 1, unitPrice: '30.00' }],
@@ -810,14 +818,30 @@ describe.skipIf(!ENABLED)('order service (database)', () => {
         total: 3,
         open: 2,
         pending: 2,
+        processing: 0,
+        delivered: 0,
         cancelled: 1,
         revenue: '60.00',
         newLast30Days: 3,
       });
 
-      // Delivering one leaves `open` at one: delivered is also no longer open.
+      // Mid-way, the second order shows up in the processing stage.
       await changeOrderStatus(ownerC, second.id, 'CONFIRMED');
       await changeOrderStatus(ownerC, second.id, 'PROCESSING');
+
+      const afterProcessing = await getOrderStats(ownerC);
+      expect(afterProcessing).toMatchObject({
+        total: 3,
+        open: 2,
+        pending: 1,
+        processing: 1,
+        shipped: 0,
+        delivered: 0,
+        cancelled: 1,
+        revenue: '60.00',
+      });
+
+      // Delivering one leaves `open` at one: delivered is also no longer open.
       await changeOrderStatus(ownerC, second.id, 'SHIPPED');
       await changeOrderStatus(ownerC, second.id, 'DELIVERED');
 
@@ -826,8 +850,10 @@ describe.skipIf(!ENABLED)('order service (database)', () => {
         total: 3,
         open: 1,
         pending: 1,
-        cancelled: 1,
+        processing: 0,
         shipped: 0,
+        delivered: 1,
+        cancelled: 1,
         revenue: '60.00',
       });
       expect(afterDelivery.total).toBeGreaterThan(afterDelivery.open);

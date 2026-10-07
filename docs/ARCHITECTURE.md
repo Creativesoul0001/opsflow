@@ -1,8 +1,9 @@
-# OpsFlow — Architecture (Phase 1)
+# OpsFlow — Architecture (Phases 1–3)
 
-This document explains the structural decisions behind Phase 1: how
-multi-tenancy is modelled, where the trust boundary sits, how requests flow
-through the layers, and what each folder is responsible for.
+This document explains the structural decisions behind the platform, the
+Customers CRM module and the Orders module: how multi-tenancy is modelled,
+where the trust boundary sits, how requests flow through the layers, and what
+each folder is responsible for.
 
 For setup instructions see the [README](../README.md).
 
@@ -39,8 +40,10 @@ PostgreSQL
 ```
 
 **Why this matters:** route handlers contain no business logic and services
-contain no HTTP concerns. When Phase 2 adds Customers, a new service is added
-under `services/` and its route handler only wires the layers together.
+contain no HTTP concerns. Phase 2 (Customers) and Phase 3 (Orders) both followed
+this exact path — a service under `services/` and a route handler that only
+wires the layers together — which is the repeatable recipe for every future
+module (§8).
 
 ---
 
@@ -165,6 +168,57 @@ The privilege ladder (OWNER ⊃ ADMIN ⊃ MANAGER ⊃ EMPLOYEE) is asserted in
 | GET/POST | `/api/auth/[...nextauth]` | public  | Auth.js protocol routes (session, csrf, …) |
 
 No placeholder endpoints were added; the foundation is intentionally minimal.
+The business modules built on it, however, follow the same conventions.
+
+### Endpoints (Customers)
+
+| Method | Path                            | Permission         | Purpose                                 |
+| ------ | ------------------------------- | ------------------ | --------------------------------------- |
+| GET    | `/api/customers`                | `customers:read`   | List, search, filter, sort, paginate    |
+| POST   | `/api/customers`                | `customers:create` | Create (201)                            |
+| GET    | `/api/customers/:id`            | `customers:read`   | Detail incl. notes                      |
+| PATCH  | `/api/customers/:id`            | `customers:update` | Edit contact / company                  |
+| PATCH  | `/api/customers/:id/assignment` | `customers:assign` | Assign / unassign an active member      |
+| DELETE | `/api/customers/:id`            | `customers:update` | Soft-archive with optional reason (204) |
+| PATCH  | `/api/customers/:id/notes`      | `customers:update` | Append a note                           |
+| GET    | `/api/customers/:id/activities` | `customers:read`   | Audit timeline                          |
+
+### Endpoints (Orders)
+
+| Method | Path                         | Permission      | Purpose                                              |
+| ------ | ---------------------------- | --------------- | ---------------------------------------------------- |
+| GET    | `/api/orders`                | `orders:read`   | List, search, filter, sort, paginate                 |
+| POST   | `/api/orders`                | `orders:create` | Create; totals derived server-side (201)             |
+| GET    | `/api/orders/:id`            | `orders:read`   | Detail with items, customer, assignment              |
+| PATCH  | `/api/orders/:id`            | `orders:update` | Edit customer / money inputs (PENDING/CONFIRMED)     |
+| DELETE | `/api/orders/:id`            | `orders:cancel` | Cancel with optional reason (204)                    |
+| POST   | `/api/orders/:id/status`     | `orders:update` | Move forward one step per the workflow policy        |
+| PATCH  | `/api/orders/:id/assignment` | `orders:assign` | Assign / unassign an active member                   |
+| POST   | `/api/orders/:id/notes`      | `orders:update` | Append a note                                        |
+| GET    | `/api/orders/:id/activities` | `orders:read`   | Audit timeline                                       |
+| GET    | `/api/orders/members`        | `orders:assign` | Assignable members (declared _before_ `:id`)         |
+| GET    | `/api/orders/stats`          | `orders:read`   | Dashboard counts + revenue (declared _before_ `:id`) |
+
+### Money and workflow rules (Orders)
+
+- Money travels as a decimal string (`"120.50"`); it is parsed to integer minor
+  units and stored that way. A tax rate is stored in basis points and rendered
+  as a percentage string.
+- `subtotal`, `tax` and `total` are **outputs of `computeOrderTotals`
+  (`src/lib/orders/calculation.ts`)**, never client inputs — the schemas reject
+  them outright, so a payload cannot claim totals that disagree with its lines.
+  All arithmetic is integer-based; the client shows a live preview from the same
+  pure module.
+- Order numbers are `ORD-######` sequential **per organization** (unique
+  `(organizationId, sequence)`), allocated inside the create transaction.
+- The status workflow is Pending → Confirmed → Processing → Shipped →
+  Delivered; Cancelled is allowed from Pending/Confirmed/Processing only.
+  Transitions and terminal-state immutability are enforced in the service (the
+  UI only mirrors them), and both Delivered and Cancelled are final states that
+  preserve the record and its history.
+- Single-record lookups are `findFirst` on `(id, organizationId)` and return
+  the same 404 for a missing id as for someone else's id, so existence is never
+  leaked across tenants.
 
 ---
 
@@ -199,9 +253,10 @@ No placeholder endpoints were added; the foundation is intentionally minimal.
 
 ---
 
-## 8. Extending for Phase 2
+## 8. Extending with a new module
 
-Adding a module is a bounded, repeatable set of steps:
+Adding a module is a bounded, repeatable set of steps, proven by Customers
+(Phase 2) and Orders (Phase 3):
 
 1. **Prisma:** add the model(s) with `organizationId` FK + index.
 2. **RBAC:** reuse existing permission keys (the full vocabulary is already
