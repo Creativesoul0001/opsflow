@@ -42,7 +42,10 @@ describe('permission catalogue', () => {
   });
 
   it('recognises catalogue members and rejects anything else', () => {
-    expect(isPermission(PERMISSIONS.ORDERS_WRITE)).toBe(true);
+    expect(isPermission(PERMISSIONS.ORDERS_CREATE)).toBe(true);
+    expect(isPermission(PERMISSIONS.ORDERS_UPDATE)).toBe(true);
+    expect(isPermission(PERMISSIONS.ORDERS_CANCEL)).toBe(true);
+    expect(isPermission(PERMISSIONS.ORDERS_ASSIGN)).toBe(true);
     expect(isPermission('orders:teleport')).toBe(false);
   });
 });
@@ -98,13 +101,17 @@ describe('privilege hierarchy', () => {
     expect(manager.has(PERMISSIONS.SETTINGS_WRITE)).toBe(false);
   });
 
-  it('restricts EMPLOYEE to read-only access outside support', () => {
+  it('restricts EMPLOYEE to read/create/update access outside support', () => {
     const employee = new Set(permissionsForRole(ROLES.EMPLOYEE));
-    expect(employee.has(PERMISSIONS.ORDERS_WRITE)).toBe(false);
     expect(employee.has(PERMISSIONS.FINANCE_READ)).toBe(false);
     expect(employee.has(PERMISSIONS.CUSTOMERS_READ)).toBe(true);
     expect(employee.has(PERMISSIONS.CUSTOMERS_CREATE)).toBe(true);
     expect(employee.has(PERMISSIONS.CUSTOMERS_UPDATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_READ)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_CREATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_UPDATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_CANCEL)).toBe(false);
+    expect(employee.has(PERMISSIONS.ORDERS_ASSIGN)).toBe(false);
   });
 
   it('marks only OWNER and ADMIN as administrative', () => {
@@ -164,6 +171,54 @@ describe('customer permission granularity', () => {
   });
 });
 
+/**
+ * Phase 3 replaced the coarse `orders:write` / `orders:delete` pair with
+ * per-action permissions so cancelling and assigning an order can be withheld
+ * without blocking day-to-day editing.
+ */
+describe('order permission granularity', () => {
+  const ORDER_PERMISSIONS = [
+    PERMISSIONS.ORDERS_READ,
+    PERMISSIONS.ORDERS_CREATE,
+    PERMISSIONS.ORDERS_UPDATE,
+    PERMISSIONS.ORDERS_CANCEL,
+    PERMISSIONS.ORDERS_ASSIGN,
+  ];
+
+  it('no longer defines the coarse write/delete keys', () => {
+    const keys = PERMISSION_CATALOG.map((permission) => permission.key);
+
+    expect(keys).not.toContain('orders:write');
+    expect(keys).not.toContain('orders:delete');
+  });
+
+  it('defines exactly the five order permissions', () => {
+    const keys = PERMISSION_CATALOG.filter((p) => p.resource === 'orders').map((p) => p.key);
+
+    expect(keys.sort()).toEqual([...ORDER_PERMISSIONS].sort());
+  });
+
+  it('gives OWNER, ADMIN and MANAGER every order permission', () => {
+    for (const role of [ROLES.OWNER, ROLES.ADMIN, ROLES.MANAGER]) {
+      const granted = new Set(permissionsForRole(role));
+
+      for (const permission of ORDER_PERMISSIONS) {
+        expect(granted.has(permission), `${role} lacks ${permission}`).toBe(true);
+      }
+    }
+  });
+
+  it('lets EMPLOYEE manage orders but not cancel or assign them', () => {
+    const employee = new Set(permissionsForRole(ROLES.EMPLOYEE));
+
+    expect(employee.has(PERMISSIONS.ORDERS_READ)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_CREATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_UPDATE)).toBe(true);
+    expect(employee.has(PERMISSIONS.ORDERS_CANCEL)).toBe(false);
+    expect(employee.has(PERMISSIONS.ORDERS_ASSIGN)).toBe(false);
+  });
+});
+
 describe('permission guards', () => {
   it('recognises known role keys', () => {
     expect(isRoleKey('OWNER')).toBe(true);
@@ -176,7 +231,7 @@ describe('permission guards', () => {
 
   it('allows a permitted action and denies a forbidden one', () => {
     const manager = contextFor(ROLES.MANAGER);
-    expect(hasPermission(manager, PERMISSIONS.ORDERS_WRITE)).toBe(true);
+    expect(hasPermission(manager, PERMISSIONS.ORDERS_UPDATE)).toBe(true);
     expect(hasPermission(manager, PERMISSIONS.SETTINGS_WRITE)).toBe(false);
   });
 

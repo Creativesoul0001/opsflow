@@ -85,18 +85,25 @@ async function main(): Promise<void> {
 
     // Roles are a closed set: reconcile rather than accumulate, so removing a
     // permission from a definition actually revokes it.
-    await prisma.$transaction([
-      prisma.rolePermission.deleteMany({
-        where: { roleId: roleRow.id, permissionId: { notIn: permissionIds } },
-      }),
-      ...permissionIds.map((permissionId) =>
-        prisma.rolePermission.upsert({
-          where: { roleId_permissionId: { roleId: roleRow.id, permissionId } },
-          create: { roleId: roleRow.id, permissionId },
-          update: {},
+    //
+    // The default 5s transaction timeout is easy to blow through on a cold or
+    // shared Postgres right after migrations, so it is raised here rather than
+    // leaving reseeding to fail intermittently.
+    await prisma.$transaction(
+      [
+        prisma.rolePermission.deleteMany({
+          where: { roleId: roleRow.id, permissionId: { notIn: permissionIds } },
         }),
-      ),
-    ]);
+        ...permissionIds.map((permissionId) =>
+          prisma.rolePermission.upsert({
+            where: { roleId_permissionId: { roleId: roleRow.id, permissionId } },
+            create: { roleId: roleRow.id, permissionId },
+            update: {},
+          }),
+        ),
+      ],
+      { maxWait: 15_000, timeout: 60_000 },
+    );
 
     console.log(`  ${role.key}: ${permissionIds.length} permissions granted.`);
   }

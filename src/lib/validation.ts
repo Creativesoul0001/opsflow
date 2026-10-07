@@ -57,6 +57,30 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 /** Reads an unknown request body, enforcing a size ceiling before parsing. */
 export async function readJsonBody(request: Request, maxBytes = 16_384): Promise<unknown> {
+  const raw = await readRawBody(request, maxBytes);
+  if (raw.trim().length === 0) {
+    throw new ValidationError([{ path: '(body)', message: 'Request body must be valid JSON.' }]);
+  }
+  return JSON.parse(raw) as unknown;
+}
+
+/**
+ * Like `readJsonBody`, but an absent body is `{}` instead of a 422.
+ *
+ * `DELETE` is the case that needs it: a client cancelling an order sends no
+ * payload at all, while a payload that *is* sent still has to parse.
+ */
+export async function readOptionalJsonBody(request: Request, maxBytes = 16_384): Promise<unknown> {
+  const raw = (await readRawBody(request, maxBytes)).trim();
+  if (raw.length === 0) return {};
+  return JSON.parse(raw) as unknown;
+}
+
+/**
+ * Enforces the size ceiling and confirms the body is JSON, returning it raw so
+ * the two readers above can decide what an empty body means.
+ */
+async function readRawBody(request: Request, maxBytes: number): Promise<string> {
   const declared = request.headers.get('content-length');
   if (declared && Number(declared) > maxBytes) {
     throw new ValidationError([{ path: '(body)', message: 'Request body is too large.' }]);
@@ -68,10 +92,12 @@ export async function readJsonBody(request: Request, maxBytes = 16_384): Promise
   }
 
   try {
-    return JSON.parse(raw) as unknown;
+    JSON.parse(raw.trim().length === 0 ? 'null' : raw);
   } catch {
     throw new ValidationError([{ path: '(body)', message: 'Request body must be valid JSON.' }]);
   }
+
+  return raw;
 }
 
 /** Parses `input` against `schema`, converting Zod issues into our error type. */

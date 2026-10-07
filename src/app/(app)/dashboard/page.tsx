@@ -1,11 +1,15 @@
+import Link from 'next/link';
+
 import { TrendPanel } from '@/components/dashboard/trend-panel';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { getAuthorizationContext } from '@/lib/auth/session';
 import { formatCount } from '@/lib/customers/presentation';
+import { formatMoney } from '@/lib/orders/presentation';
 import { assertPermission, hasPermission } from '@/lib/rbac/guard';
 import { PERMISSIONS } from '@/lib/rbac/permissions';
 import { getCustomerStats } from '@/lib/services/customer.service';
+import { getOrderStats } from '@/lib/services/order.service';
 
 export const metadata = { title: 'Dashboard' };
 
@@ -18,11 +22,14 @@ export default async function DashboardPage() {
 
   const firstName = context!.name.split(' ')[0] ?? context!.name;
 
-  // Customer counts come from Postgres, scoped to this organization by the
-  // service. A member without customer access sees placeholders rather than a
-  // number they are not entitled to.
+  // Counts come from Postgres, scoped to this organization by the service. A
+  // member without access to a module sees a placeholder rather than a number
+  // they are not entitled to.
   const canReadCustomers = hasPermission(context!, PERMISSIONS.CUSTOMERS_READ);
   const stats = canReadCustomers ? await getCustomerStats(context!) : null;
+
+  const canReadOrders = hasPermission(context!, PERMISSIONS.ORDERS_READ);
+  const orderStats = canReadOrders ? await getOrderStats(context!) : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -63,15 +70,55 @@ export default async function DashboardPage() {
               />
             </>
           ) : (
-            <StatCard
-              label="Customers"
-              description="Requires the customers:read permission."
-            />
+            <StatCard label="Customers" description="Requires the customers:read permission." />
           )}
 
           <StatCard label="Revenue" description="Requires the Finance module." />
-          <StatCard label="Orders" description="Requires the Orders module." />
           <StatCard label="Open tickets" description="Requires the Support module." />
+        </div>
+      </section>
+
+      <section aria-label="Orders" className="space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-fg text-lg font-semibold tracking-tight">Orders</h2>
+          {orderStats ? (
+            <Link href="/orders" className="text-brand hover:text-fg text-sm">
+              View all orders
+            </Link>
+          ) : null}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {orderStats ? (
+            <>
+              <StatCard
+                label="Total orders"
+                description="Everything your organization has taken."
+                value={formatCount(orderStats.total)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Open orders"
+                description="Not yet delivered or cancelled."
+                value={formatCount(orderStats.open)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Awaiting confirmation"
+                description="Still in PENDING."
+                value={formatCount(orderStats.pending)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Order value"
+                description="Sum of every order that was not cancelled."
+                value={formatMoney(orderStats.revenue)}
+                isPlaceholder={false}
+              />
+            </>
+          ) : (
+            <StatCard label="Orders" description="Requires the orders:read permission." />
+          )}
         </div>
       </section>
 
@@ -81,16 +128,14 @@ export default async function DashboardPage() {
         </div>
 
         <Card>
-          <CardHeader
-            title="Getting started"
-            description="Phase 2 delivered the CRM foundation."
-          />
+          <CardHeader title="Getting started" description="Phase 3 delivered order management." />
           <CardBody className="space-y-4 text-sm">
             <ul className="text-fg-muted space-y-2.5">
               {[
                 'Your account, organization and role are set up.',
                 'Customers are searchable, filterable and archived rather than deleted.',
-                'Every change is recorded on the customer timeline.',
+                'Orders carry a number, a workflow, an owner and a full activity trail.',
+                'Totals are recalculated on the server, so no figure can be typed in.',
                 'Other modules report metrics as each phase ships.',
               ].map((item) => (
                 <li key={item} className="flex gap-2">

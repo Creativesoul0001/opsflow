@@ -1,4 +1,4 @@
-// OpsFlow schema — Phase 1 foundation, Phase 2 CRM (Customers).
+// OpsFlow schema — Phase 1 foundation, Phase 2 CRM (Customers), Phase 3 Orders.
 //
 // Design notes:
 //  * Every tenant-owned row hangs off `Organization` through
@@ -53,6 +53,30 @@ enum CustomerActivityType {
   ARCHIVED
 }
 
+/// Order lifecycle states.
+///
+/// `CANCELLED` and `DELIVERED` are terminal. Legal transitions are enforced in
+/// `src/lib/orders/status.ts`, not in the database, so the API can return a
+/// meaningful validation error.
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+/// Types of activities recorded on an order timeline.
+enum OrderActivityType {
+  CREATED
+  UPDATED
+  STATUS_CHANGED
+  ASSIGNED
+  CANCELLED
+  NOTE_ADDED
+}
+
 model User {
   id           String     @id @default(uuid(7)) @db.Uuid
   email        String     @unique
@@ -65,7 +89,9 @@ model User {
 
   memberships        OrganizationMembership[]
   assignedCustomers  Customer[]               @relation("CustomerAssignee")
+  assignedOrders     Order[]                  @relation("OrderAssignee")
   customerActivities CustomerActivity[]
+  orderActivities    OrderActivity[]
 
   @@index([status])
   @@map("users")
@@ -81,6 +107,10 @@ model Organization {
   memberships        OrganizationMembership[]
   customers          Customer[]
   customerActivities CustomerActivity[]
+  orders             Order[]
+  orderItems         OrderItem[]
+  orderActivities    OrderActivity[]
+  orderSequence      OrderSequence?
 
   @@map("organizations")
 }
@@ -164,7 +194,7 @@ model Customer {
   status         CustomerStatus @default(ACTIVE)
   customerType   CustomerType   @default(INDIVIDUAL) @map("customer_type")
   /// Assignee. Null means unassigned. Must be an ACTIVE member of the same
-  /// organization — `users` is global, so the service layer verifies this.
+  /// organization - `users` is global, so the service layer verifies this.
   assignedUserId String?        @map("assigned_user_id") @db.Uuid
   notes          String?
   archivedAt     DateTime?      @map("archived_at")
@@ -174,6 +204,7 @@ model Customer {
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assignedUser User?              @relation("CustomerAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   activities   CustomerActivity[]
+  orders       Order[]
 
   /// One record per email address per organization. Emails are deliberately not
   /// globally unique: the same person can legitimately be a customer of two
@@ -209,4 +240,138 @@ model CustomerActivity {
   @@index([customerId, createdAt])
   @@index([organizationId, createdAt])
   @@map("customer_activities")
+}
+
+/// A business order. Every order belongs to exactly one organization and one
+/// customer. Financial totals are computed server-side and stored as integers
+/// to avoid floating-point errors for currency values.
+///
+/// `subtotal`, `discount`, `tax`, `total` and `OrderItem` amounts are all stored
+/// in the organization's minor currency unit (e.g. paise) as PostgreSQL `int4`.
+/// The service layer rejects anything that would overflow that range.
+model Order {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  organizationId String      @map("organization_id") @db.Uuid
+  customerId     String      @map("customer_id") @db.Uuid
+  /// Human-readable order number unique within the organization (e.g. ORD-000001).
+  /// Always allocated from `OrderSequence`; never accepted from a client.
+  orderNumber    String      @map("order_number")
+  status         OrderStatus @default(PENDING)
+  /// Sum of line-item totals before order-level discount and tax.
+  subtotal       Int         @default(0)
+  /// Order-level discount in minor units. Never exceeds `subtotal - tax`.
+  discount       Int         @default(0)
+  /// Tax in minor units. Always computed from `taxRate` and the discounted
+  /// subtotal by the server; never accepted from a client.
+  tax            Int         @default(0)
+  /// Tax rate snapshot, in basis points (1800 = 18.00%). Kept so the order can
+  /// still explain its own total after the configured rate changes.
+  taxRate        Int         @default(0) @map("tax_rate")
+  /// `subtotal - discount + tax`. Recomputed server-side on every mutation.
+  total          Int         @default(0)
+  notes          String?
+  /// Assignee. Null means unassigned. Must be an ACTIVE member of the same
+  /// organization - `users` is global, so the service layer verifies this.
+  assignedUserId String?     @map("assigned_user_id") @db.Uuid
+  /// Set when the order moves to `CANCELLED`. Cancellation is a status change,
+  /// never a hard delete, so order history survives.
+  cancelledAt    DateTime?   @map("cancelled_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  assignedUser User?           @relation("OrderAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  items        OrderItem[]
+  activities   OrderActivity[]
+
+  @@unique([organizationId, orderNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, customerId])
+  @@index([organizationId, customerId, createdAt])
+  @@index([organizationId, assignedUserId])
+  @@index([organizationId, createdAt])
+  @@map("orders")
+}
+
+/// Order line item.
+///
+/// `organizationId` mirrors the parent order's organization so that every
+/// tenant-owned row can be filtered without a join. The service layer asserts it
+/// equals the parent order's organization on write.
+///
+/// `productId` is a forward reference to the planned Inventory/Products module.
+/// It intentionally has no foreign key yet: order history must not break when a
+/// product is later removed.
+model OrderItem {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  productId      String?  @map("product_id") @db.Uuid
+  /// Name captured at the time the order was placed. Order history must keep
+  /// showing what was ordered even if the product is later renamed.
+  productName    String   @map("product_name")
+  quantity       Int
+  /// Price per unit in minor currency units.
+  unitPrice      Int      @map("unit_price")
+  /// Line discount in minor currency units. Never exceeds `quantity * unitPrice`.
+  discount       Int      @default(0)
+  /// `quantity * unitPrice - discount`. Recomputed server-side on every write.
+  total          Int      @default(0)
+  /// Zero-based index of the line within its order, assigned server-side.
+  ///
+  /// `created_at` cannot order line items: every row in one insert shares the
+  /// transaction timestamp, so lines would otherwise render in an arbitrary
+  /// order that changes between reads.
+  position       Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, orderId])
+  @@index([orderId, position])
+  @@index([organizationId, productId])
+  @@map("order_items")
+}
+
+/// Per-organization order-number counter.
+///
+/// Order numbers are human-readable and sortable (`ORD-000001`), which rules out
+/// a sequence per tenant. A single row per organization is incremented inside
+/// the same transaction that creates the order, so concurrent creates can never
+/// receive the same number.
+model OrderSequence {
+  organizationId String   @id @map("organization_id") @db.Uuid
+  /// Highest number issued so far.
+  lastNumber     Int      @default(0) @map("last_number")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("order_sequences")
+}
+
+/// Append-only timeline of order events.
+///
+/// Mirrors `CustomerActivity`: written as a side effect of real operations by
+/// the service layer so the timeline cannot be forged directly, and `userId`
+/// uses `onDelete: SetNull` so history survives member removal.
+model OrderActivity {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  orderId        String            @map("order_id") @db.Uuid
+  userId         String?           @map("user_id") @db.Uuid
+  type           OrderActivityType
+  description    String
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, orderId, createdAt])
+  @@index([orderId, createdAt])
+  @@map("order_activities")
 }

@@ -4,11 +4,7 @@ import { cache } from 'react';
 
 import { auth } from '@/lib/auth/config';
 import { AuthenticationError } from '@/lib/api/errors';
-import {
-  defaultOrganizationId,
-  loadAuthorizationContext,
-  requireMembership,
-} from '@/lib/tenancy';
+import { defaultOrganizationId, loadAuthorizationContext, requireMembership } from '@/lib/tenancy';
 import type { AuthorizationContext } from '@/lib/rbac/guard';
 
 export interface SessionUser {

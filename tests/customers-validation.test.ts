@@ -22,7 +22,11 @@ const VALID_UUID = '018f6a2c-5b3c-7c1e-9a4d-2f7b8c9d0e1f';
 
 describe('createCustomerSchema', () => {
   it('accepts a minimal customer and applies defaults', () => {
-    const parsed = createCustomerSchema.parse({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com' });
+    const parsed = createCustomerSchema.parse({
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+    });
 
     expect(parsed.status).toBe('ACTIVE');
     expect(parsed.customerType).toBe('INDIVIDUAL');
@@ -113,7 +117,12 @@ describe('createCustomerSchema', () => {
     ],
     [
       'non-uuid assignee',
-      { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', assignedUserId: 'user-1' },
+      {
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        email: 'ada@example.com',
+        assignedUserId: 'user-1',
+      },
     ],
   ])('rejects %s', (_label, payload) => {
     expect(createCustomerSchema.safeParse(payload).success).toBe(false);

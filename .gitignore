@@ -142,4 +142,10 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
+# Playwright artifacts
+/test-results
+/playwright-report
+/blob-report
+/playwright/.cache
+
 /src/generated/prisma

@@ -57,37 +57,8 @@ export function customerActivityLabel(type: string): string {
   return CUSTOMER_ACTIVITY_LABELS[type] ?? type;
 }
 
-const dateFormatter = new Intl.DateTimeFormat('en-US', {
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-  timeZone: 'UTC',
-});
-
-const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: 'UTC',
-});
-
 /**
- * Formats an ISO timestamp as `Mar 4, 2026`.
- *
- * The time zone is pinned to UTC so the same string is produced on the server and
- * in the browser; a locale-dependent default would risk a hydration mismatch.
+ * Dates and counts live in `@/lib/format` so every module formats them the same
+ * way. Re-exported here so existing customer imports keep working unchanged.
  */
-export function formatDate(iso: string): string {
-  return dateFormatter.format(new Date(iso));
-}
-
-export function formatDateTime(iso: string): string {
-  return dateTimeFormatter.format(new Date(iso));
-}
-
-/** `1,204` — used for counts in the list header and dashboard. */
-export function formatCount(value: number): string {
-  return new Intl.NumberFormat('en-US').format(value);
-}
+export { formatCount, formatDate, formatDateTime } from '@/lib/format';

@@ -8,11 +8,7 @@ import type { CustomerActivityDto } from '@/lib/services/customer.service';
  * is a record of what happened rather than a free-text log a member could
  * rewrite.
  */
-export function ActivityTimeline({
-  activities,
-}: {
-  activities: readonly CustomerActivityDto[];
-}) {
+export function ActivityTimeline({ activities }: { activities: readonly CustomerActivityDto[] }) {
   if (activities.length === 0) {
     return (
       <p className="text-fg-muted text-sm">
@@ -26,10 +22,7 @@ export function ActivityTimeline({
     <ol className="space-y-4">
       {activities.map((activity) => (
         <li key={activity.id} className="flex gap-3">
-          <span
-            aria-hidden="true"
-            className="bg-brand mt-1.5 size-2 shrink-0 rounded-full"
-          />
+          <span aria-hidden="true" className="bg-brand mt-1.5 size-2 shrink-0 rounded-full" />
           <div className="min-w-0">
             <p className="text-fg text-sm font-medium">{customerActivityLabel(activity.type)}</p>
             <p className="text-fg-muted text-sm">{activity.description}</p>

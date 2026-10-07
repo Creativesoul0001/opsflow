@@ -16,16 +16,10 @@ const TONES = {
 
 export type BadgeTone = keyof typeof TONES;
 
-export function Badge({
-  tone = 'neutral',
-  children,
-}: {
-  tone?: BadgeTone;
-  children: ReactNode;
-}) {
+export function Badge({ tone = 'neutral', children }: { tone?: BadgeTone; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 whitespace-nowrap ${TONES[tone]}`}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ${TONES[tone]}`}
     >
       {children}
     </span>

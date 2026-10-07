@@ -22,8 +22,10 @@ export const PERMISSIONS = {
   CUSTOMERS_ASSIGN: 'customers:assign',
 
   ORDERS_READ: 'orders:read',
-  ORDERS_WRITE: 'orders:write',
-  ORDERS_DELETE: 'orders:delete',
+  ORDERS_CREATE: 'orders:create',
+  ORDERS_UPDATE: 'orders:update',
+  ORDERS_CANCEL: 'orders:cancel',
+  ORDERS_ASSIGN: 'orders:assign',
 
   INVENTORY_READ: 'inventory:read',
   INVENTORY_WRITE: 'inventory:write',
@@ -101,18 +103,35 @@ export const PERMISSION_CATALOG: readonly {
     description: 'Assign customers to a team member',
   },
 
-  { key: PERMISSIONS.ORDERS_READ, resource: 'orders', action: 'read', description: 'View orders' },
   {
-    key: PERMISSIONS.ORDERS_WRITE,
+    key: PERMISSIONS.ORDERS_READ,
     resource: 'orders',
-    action: 'write',
-    description: 'Create and update orders',
+    action: 'read',
+    description: 'View orders',
   },
   {
-    key: PERMISSIONS.ORDERS_DELETE,
+    key: PERMISSIONS.ORDERS_CREATE,
     resource: 'orders',
-    action: 'delete',
-    description: 'Cancel and delete orders',
+    action: 'create',
+    description: 'Create orders',
+  },
+  {
+    key: PERMISSIONS.ORDERS_UPDATE,
+    resource: 'orders',
+    action: 'update',
+    description: 'Update order details and status',
+  },
+  {
+    key: PERMISSIONS.ORDERS_CANCEL,
+    resource: 'orders',
+    action: 'cancel',
+    description: 'Cancel orders',
+  },
+  {
+    key: PERMISSIONS.ORDERS_ASSIGN,
+    resource: 'orders',
+    action: 'assign',
+    description: 'Assign orders to members',
   },
 
   {
@@ -227,7 +246,7 @@ export const PERMISSION_CATALOG: readonly {
     action: 'delete',
     description: 'Permanently delete the organization',
   },
-];
+] as const;
 
 export const ALL_PERMISSIONS: readonly Permission[] = PERMISSION_CATALOG.map((p) => p.key);
 

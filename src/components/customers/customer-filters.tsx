@@ -54,6 +54,7 @@ export function CustomerFilters() {
 
   return (
     <form
+      method="post"
       className="space-y-3"
       onSubmit={(event) => {
         event.preventDefault();

@@ -33,8 +33,7 @@ export const MODULES = [
     label: 'Orders',
     href: '/orders',
     permission: PERMISSIONS.ORDERS_READ,
-    status: 'planned',
-    phase: 2,
+    status: 'available',
     summary: 'Order intake, fulfilment status and returns.',
   },
   {

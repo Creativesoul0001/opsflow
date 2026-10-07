@@ -42,9 +42,7 @@ export default async function EditCustomerPage({ params }: { params: Promise<{ i
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
         <h1 className="text-fg text-2xl font-semibold tracking-tight">Edit customer</h1>
-        <p className="text-fg-muted mt-1 text-sm">
-          Changes are recorded in the activity timeline.
-        </p>
+        <p className="text-fg-muted mt-1 text-sm">Changes are recorded in the activity timeline.</p>
       </header>
 
       <Alert tone="info">

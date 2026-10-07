@@ -14,6 +14,11 @@ import type {
 } from '@/lib/customers/validation';
 import { assertPermission, type AuthorizationContext } from '@/lib/rbac/guard';
 import { PERMISSIONS } from '@/lib/rbac/permissions';
+import {
+  listActiveMembers,
+  requireActiveMember,
+  type AssignableMember,
+} from '@/lib/services/members.service';
 
 const log = logger.child('customers');
 
@@ -94,14 +99,7 @@ export interface CustomerActivityDto {
   user: { id: string; name: string } | null;
 }
 
-export interface AssignableMember {
-  membershipId: string;
-  userId: string;
-  name: string;
-  email: string;
-  roleName: string;
-  roleKey: string;
-}
+export type { AssignableMember } from '@/lib/services/members.service';
 
 export interface CustomerStats {
   total: number;
@@ -156,32 +154,15 @@ async function requireCustomer(
 
 /**
  * Confirms a user is an ACTIVE member of the caller's organization before they
- * are assigned a customer.
- *
- * `users` is a global table, so the foreign key on `assignedUserId` alone would
- * happily accept a user from a different organization. This check is what stops
- * a customer from being assigned to (and therefore exposing work to) a stranger.
+ * are assigned a customer. Delegates to the shared membership helper so CRM and
+ * Orders cannot disagree about what "assignable" means.
  */
-async function requireAssignableMember(
+function requireAssignableMember(
   organizationId: string,
   userId: string,
   client: Prisma.TransactionClient | typeof db = db,
 ): Promise<{ id: string; name: string }> {
-  const membership = await client.organizationMembership.findFirst({
-    where: { organizationId, userId, status: 'ACTIVE' },
-    select: { user: { select: { id: true, name: true } } },
-  });
-
-  if (!membership) {
-    throw new ValidationError([
-      {
-        path: 'assignedUserId',
-        message: 'That person is not an active member of this organization.',
-      },
-    ]);
-  }
-
-  return membership.user;
+  return requireActiveMember(organizationId, userId, 'assignedUserId', client);
 }
 
 /**
@@ -563,24 +544,7 @@ export async function listCustomerActivities(
 export async function listAssignableMembers(
   context: AuthorizationContext,
 ): Promise<AssignableMember[]> {
-  const memberships = await db.organizationMembership.findMany({
-    where: { organizationId: context.organizationId, status: 'ACTIVE' },
-    select: {
-      id: true,
-      user: { select: { id: true, name: true, email: true } },
-      role: { select: { key: true, name: true } },
-    },
-    orderBy: { createdAt: 'asc' },
-  });
-
-  return memberships.map((membership) => ({
-    membershipId: membership.id,
-    userId: membership.user.id,
-    name: membership.user.name,
-    email: membership.user.email,
-    roleName: membership.role.name,
-    roleKey: membership.role.key,
-  }));
+  return listActiveMembers(context.organizationId);
 }
 
 /**

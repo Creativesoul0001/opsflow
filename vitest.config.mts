@@ -17,6 +17,18 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     globals: false,
     env: localEnv,
+    // Database-backed suites issue dozens of real transactions, and a cold
+    // Postgres on a busy machine can easily take longer than Vitest's 5s
+    // default. An abandoned query is worse than a slow one: it leaves the
+    // connection mid-protocol and fails the whole file in `afterAll`.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    // Two database-backed files opening their own pools at the same time drive
+    // the test connection into a protocol desync (Postgres 08P01), which shows
+    // up as a failure in `beforeAll` of whichever file loses the race. Test
+    // files therefore run one at a time: the suites are I/O bound anyway, so
+    // this trades a little wall-clock time for a run that does not flake.
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

@@ -56,7 +56,12 @@ export function CustomerPagination({ pagination }: { pagination: Pagination }) {
         <span className="text-fg-muted text-sm">
           Page {formatCount(page)} of {formatCount(Math.max(totalPages, 1))}
         </span>
-        <Button variant="secondary" size="sm" disabled={!hasNextPage} onClick={() => goTo(page + 1)}>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!hasNextPage}
+          onClick={() => goTo(page + 1)}
+        >
           Next
         </Button>
       </div>

@@ -41,7 +41,10 @@ export function formString(form: FormData, name: string): string {
  * forms can render them inline; any other failure throws an `ApiRequestError`
  * carrying only the safe server message.
  */
-async function requestJson<T>(url: string, init: RequestInit): Promise<{ data: T; status: number }> {
+async function requestJson<T>(
+  url: string,
+  init: RequestInit,
+): Promise<{ data: T; status: number }> {
   const response = await fetch(url, {
     ...init,
     headers: {
@@ -94,7 +97,16 @@ export function patchJson<T>(url: string, body: unknown): Promise<{ data: T; sta
   return requestJson<T>(url, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
-/** Used by the archive action; `DELETE` still returns the archived record. */
-export function deleteJson<T>(url: string): Promise<{ data: T; status: number }> {
-  return requestJson<T>(url, { method: 'DELETE' });
+/**
+ * `DELETE`, optionally with a JSON body.
+ *
+ * Some endpoints (order cancellation) use `DELETE` for a "retire this record"
+ * action that also takes a reason; a body is only sent when one is given, so a
+ * plain delete still travels without a `content-type`.
+ */
+export function deleteJson<T>(url: string, body?: unknown): Promise<{ data: T; status: number }> {
+  return requestJson<T>(url, {
+    method: 'DELETE',
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
 }

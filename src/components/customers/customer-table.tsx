@@ -68,7 +68,13 @@ export function CustomerTable({
       <table className="w-full min-w-3xl border-collapse text-sm">
         <thead className="border-border-subtle bg-surface-muted border-b">
           <tr>
-            <SortHeader label="Name" sortKey="name" activeSort={sort} order={order} search={search} />
+            <SortHeader
+              label="Name"
+              sortKey="name"
+              activeSort={sort}
+              order={order}
+              search={search}
+            />
             <th scope="col" className={HEADING_CLASS}>
               Email
             </th>
@@ -126,7 +132,9 @@ export function CustomerTable({
                 <CustomerStatusBadge status={customer.status} />
               </td>
               <td className="text-fg-muted px-4 py-3">
-                {customer.assignedUser?.name ?? <span className="text-fg-muted/60">Unassigned</span>}
+                {customer.assignedUser?.name ?? (
+                  <span className="text-fg-muted/60">Unassigned</span>
+                )}
               </td>
               <td className="text-fg-muted px-4 py-3 whitespace-nowrap">
                 {formatDate(customer.createdAt)}

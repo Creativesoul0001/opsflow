@@ -103,12 +103,7 @@ export function CustomerForm({
   return (
     // `method="post"` keeps a pre-hydration native submit from exposing customer
     // details — including notes — as URL query parameters.
-    <form
-      method="post"
-      onSubmit={(event) => void onSubmit(event)}
-      noValidate
-      className="space-y-6"
-    >
+    <form method="post" onSubmit={(event) => void onSubmit(event)} noValidate className="space-y-6">
       {formError ? <Alert tone="error">{formError}</Alert> : null}
 
       <FieldSet legend="Customer">

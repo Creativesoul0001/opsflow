@@ -32,8 +32,8 @@ export function CustomerArchiveAction({
   if (archived) {
     return (
       <Alert tone="info" title="Archived customer">
-        This customer was archived. Their record and history are retained, and it is hidden from
-        the default list.
+        This customer was archived. Their record and history are retained, and it is hidden from the
+        default list.
       </Alert>
     );
   }

@@ -109,7 +109,10 @@ export function buildCustomerOrderBy(
       return [{ [sort]: order }, { id: 'desc' }] as Prisma.CustomerOrderByWithRelationInput[];
     case 'createdAt':
     default:
-      return [{ createdAt: order }, { id: order }] satisfies Prisma.CustomerOrderByWithRelationInput[];
+      return [
+        { createdAt: order },
+        { id: order },
+      ] satisfies Prisma.CustomerOrderByWithRelationInput[];
   }
 }
 
@@ -118,25 +121,6 @@ export function isCustomerSort(value: string): value is CustomerListQuery['sort'
   return ['name', 'createdAt', 'updatedAt', 'status'].includes(value);
 }
 
-export interface Pagination {
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
-  hasNextPage: boolean;
-  hasPreviousPage: boolean;
-}
-
-/** Pagination metadata for the `{ data, meta }` envelope. */
-export function buildPagination(page: number, limit: number, total: number): Pagination {
-  const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
-
-  return {
-    page,
-    limit,
-    total,
-    totalPages,
-    hasNextPage: page < totalPages,
-    hasPreviousPage: page > 1 && total > 0,
-  };
-}
+// Pagination lives in its own module so Orders and later modules share one
+// definition. Re-exported here to keep the existing import path stable.
+export { buildPagination, type Pagination } from '@/lib/pagination';
