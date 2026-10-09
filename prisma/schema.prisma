@@ -1,15 +1,21 @@
-// OpsFlow schema — Phase 1 foundation, Phase 2 CRM (Customers), Phase 3 Orders.
+// OpsFlow schema — Phase 1 foundation, Phase 2 CRM (Customers), Phase 3 Orders,
+// Phase 4 Inventory.
 //
 // Design notes:
 //  * Every tenant-owned row hangs off `Organization` through
-//    `OrganizationMembership`. Business tables (Customers, Orders,
-//    Inventory, Support, Finance, ...) must carry `organizationId` and MUST
-//    never be queried without a verified membership scope.
+//    `OrganizationMembership`. Business tables (Customers, Orders, Inventory,
+//    Support, Finance, ...) must carry `organizationId` and MUST never be
+//    queried without a verified membership scope.
 //  * `Role` and `Permission` are global reference data, seeded by
 //    `prisma/seed.ts`. They are not tenant-owned so that role definitions stay
 //    consistent across every organization.
 //  * IDs use UUIDv7: globally unique without coordination, and time-ordered so
 //    index locality stays good as the tables grow.
+//  * Money is stored as integer minor units (paise/cents) exactly as Orders does;
+//    a float is never used for an amount. Stock quantities are integers because
+//    every supported product is counted in whole units (see `Product.unit`).
+//    Fractional weights would need a Decimal column and would make the
+//    `quantityBefore`/`quantityAfter` audit trail ambiguous while rounding.
 
 generator client {
   provider = "prisma-client"
@@ -77,6 +83,43 @@ enum OrderActivityType {
   NOTE_ADDED
 }
 
+/// Inventory: a product is either sellable or archived. There is no hard delete
+/// path, so stock movements and order history can always explain what happened.
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum WarehouseStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// Why a `StockMovement` row exists. The enum is part of the audit trail: a
+/// movement created by the order workflow (`ORDER_DEDUCTION` / `ORDER_RELEASE`)
+/// is distinguishable from one a member made by hand (`RECEIPT` /
+/// `ADJUSTMENT`) and from one produced by a transfer (`TRANSFER_OUT` /
+/// `TRANSFER_IN`).
+enum StockMovementType {
+  /// Opening balance or a delivery from a supplier.
+  RECEIPT
+  /// Manual correction after a stock count.
+  ADJUSTMENT
+  /// Stock left the source warehouse of a transfer.
+  TRANSFER_OUT
+  /// Stock arrived in the destination warehouse of a transfer.
+  TRANSFER_IN
+  /// Stock left a warehouse because an order was confirmed.
+  ORDER_DEDUCTION
+  /// Stock returned to a warehouse because a confirmed order was cancelled.
+  ORDER_RELEASE
+}
+
+enum StockTransferStatus {
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id           String     @id @default(uuid(7)) @db.Uuid
   email        String     @unique
@@ -92,6 +135,8 @@ model User {
   assignedOrders     Order[]                  @relation("OrderAssignee")
   customerActivities CustomerActivity[]
   orderActivities    OrderActivity[]
+  stockMovements     StockMovement[]
+  stockTransfers     StockTransfer[]
 
   @@index([status])
   @@map("users")
@@ -104,13 +149,20 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships        OrganizationMembership[]
-  customers          Customer[]
-  customerActivities CustomerActivity[]
-  orders             Order[]
-  orderItems         OrderItem[]
-  orderActivities    OrderActivity[]
-  orderSequence      OrderSequence?
+  memberships           OrganizationMembership[]
+  customers             Customer[]
+  customerActivities    CustomerActivity[]
+  orders                Order[]
+  orderItems            OrderItem[]
+  orderActivities       OrderActivity[]
+  orderSequence         OrderSequence?
+  productCategories     ProductCategory[]
+  products              Product[]
+  warehouses            Warehouse[]
+  inventoryStocks       InventoryStock[]
+  stockMovements        StockMovement[]
+  stockTransfers        StockTransfer[]
+  stockTransferSequence StockTransferSequence?
 
   @@map("organizations")
 }
@@ -284,6 +336,7 @@ model Order {
   assignedUser User?           @relation("OrderAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
   items        OrderItem[]
   activities   OrderActivity[]
+  movements    StockMovement[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId, status])
@@ -301,9 +354,11 @@ model Order {
 /// tenant-owned row can be filtered without a join. The service layer asserts it
 /// equals the parent order's organization on write.
 ///
-/// `productId` is a forward reference to the planned Inventory/Products module.
-/// It intentionally has no foreign key yet: order history must not break when a
-/// product is later removed.
+/// `productId` addresses a `Product` when the line refers to a stocked catalogue
+/// item. It is nullable (an order may price an ad-hoc service) and archived —
+/// never deleted — which is what lets the reference stay sound: the product name
+/// is snapshotted onto the line, so history still reads correctly after the
+/// catalogue entry is renamed.
 model OrderItem {
   id             String   @id @default(uuid(7)) @db.Uuid
   organizationId String   @map("organization_id") @db.Uuid
@@ -329,6 +384,7 @@ model OrderItem {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product?     @relation(fields: [productId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, orderId])
   @@index([orderId, position])
@@ -374,4 +430,250 @@ model OrderActivity {
   @@index([organizationId, orderId, createdAt])
   @@index([orderId, createdAt])
   @@map("order_activities")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Inventory
+// ---------------------------------------------------------------------------
+//
+// The inventory domain is an append-only ledger of stock movements plus the
+// per-warehouse balances the ledger explains. Every quantity that ever changes
+// writes a `StockMovement` row in the same transaction, so a balance can always
+// be traced back to the movements that produced it.
+//
+// Three rules hold throughout:
+//
+//  1. Nothing deletes. Products, categories and warehouses are archived. A
+//     product that was once on an order must remain addressable forever, because
+//     order history and stock movements both point at it.
+//  2. Balances are locked before they are changed. The stock service takes row
+//     locks (`SELECT ... FOR UPDATE`) inside a transaction, so two simultaneous
+//     adjustments or transfers cannot read the same starting quantity and lose
+//     one of the two writes.
+//  3. Order effects are idempotent. `StockMovement` carries the two partial
+//     unique indexes below; combined with the one-way order workflow they make
+//     "charge twice" and "refund twice" impossible even if a request is retried.
+
+/// A product grouping, e.g. "Beverages". Archiving detaches the product list's
+/// filter but never removes the grouping from existing products.
+model ProductCategory {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  name           String
+  description    String?
+  archivedAt     DateTime? @map("archived_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products     Product[]
+
+  /// Category names are unique per organization. Two organizations may both have
+  /// a "Beverages" category without any conflict.
+  @@unique([organizationId, name])
+  @@index([organizationId, archivedAt])
+  @@map("product_categories")
+}
+
+/// A sellable catalogue item, scoped to one organization.
+///
+/// `sku` is unique per organization and is the natural key a member types; the
+/// `Product.id` UUID is never shown. `unitPrice` is what a customer is charged
+/// (the same minor-unit currency Orders uses) and `costPrice` is what the
+/// organization paid — it is optional because a reseller may not want to store
+/// supplier pricing at all.
+model Product {
+  id               String        @id @default(uuid(7)) @db.Uuid
+  organizationId   String        @map("organization_id") @db.Uuid
+  /// Null means "uncategorised", which is why the relation is `SetNull`.
+  categoryId       String?       @map("category_id") @db.Uuid
+  sku              String
+  name             String
+  description      String?
+  /// Selling price in minor currency units. Always server-derived from the input.
+  unitPrice        Int           @default(0) @map("unit_price")
+  /// Purchase cost in minor currency units, when tracked.
+  costPrice        Int?          @map("cost_price")
+  /// Quantity at or below which the product is reported as low stock. Zero means
+  /// "no reorder point configured" and therefore never flags.
+  reorderThreshold Int           @default(0) @map("reorder_threshold")
+  /// The unit this product is counted in, e.g. "pcs", "kg", "box". Stock
+  /// quantities are whole numbers of it.
+  unit             String        @default("pcs")
+  status           ProductStatus @default(ACTIVE)
+  archivedAt       DateTime?     @map("archived_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category     ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  stocks       InventoryStock[]
+  movements    StockMovement[]
+  orderItems   OrderItem[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, status])
+  @@index([organizationId, categoryId])
+  @@index([organizationId, name])
+  @@index([organizationId, createdAt])
+  @@map("products")
+}
+
+/// A physical location that holds stock.
+model Warehouse {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  /// Short human-entered code, e.g. "WH-1" or "MUM". Unique per organization.
+  code           String
+  name           String
+  addressLine1   String?         @map("address_line1")
+  addressLine2   String?         @map("address_line2")
+  city           String?
+  state          String?
+  postalCode     String?         @map("postal_code")
+  country        String?
+  /// True for exactly one ACTIVE warehouse per organization (enforced by the
+  /// service): the default source for order deductions.
+  isPrimary      Boolean         @default(false) @map("is_primary")
+  status         WarehouseStatus @default(ACTIVE)
+  archivedAt     DateTime?       @map("archived_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stocks       InventoryStock[]
+  movements    StockMovement[]
+  transfersOut StockTransfer[]  @relation("TransferFrom")
+  transfersIn  StockTransfer[]  @relation("TransferTo")
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+  @@index([organizationId, isPrimary])
+  @@map("warehouses")
+}
+
+/// Current on-hand quantity of one product in one warehouse.
+///
+/// The row is the aggregate of the movements; the service always updates the row
+/// and writes the movement in the same transaction so the two cannot disagree.
+/// `quantity` is signed: zero and positive mean stock on hand, and the service
+/// refuses to make it negative.
+model InventoryStock {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  productId      String   @map("product_id") @db.Uuid
+  warehouseId    String   @map("warehouse_id") @db.Uuid
+  quantity       Int      @default(0)
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  /// One balance per product per warehouse. This constraint is what makes
+  /// `upsert` safe under concurrency: a race resolves into a single row.
+  @@unique([productId, warehouseId])
+  @@index([organizationId, productId])
+  @@index([organizationId, warehouseId])
+  @@index([productId, quantity])
+  @@map("inventory_stocks")
+}
+
+/// A stock transfer between two warehouses of the same organization.
+///
+/// A transfer is recorded once and completed atomically: the pair of movements
+/// it produces (`TRANSFER_OUT` at the source, `TRANSFER_IN` at the destination)
+/// commit together, so a transfer can never leave quantity in limbo. The
+/// `CANCELLED` status exists for a transfer that was rejected before any
+/// movement was written.
+model StockTransfer {
+  id              String              @id @default(uuid(7)) @db.Uuid
+  organizationId  String              @map("organization_id") @db.Uuid
+  /// Human-readable transfer number unique within the organization.
+  number          String
+  fromWarehouseId String              @map("from_warehouse_id") @db.Uuid
+  toWarehouseId   String              @map("to_warehouse_id") @db.Uuid
+  status          StockTransferStatus @default(COMPLETED)
+  notes           String?
+  /// The member who performed it. Nullable so history survives their removal.
+  userId          String?             @map("user_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fromWarehouse Warehouse       @relation("TransferFrom", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouse   Warehouse       @relation("TransferTo", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  user          User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  movements     StockMovement[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, fromWarehouseId])
+  @@index([organizationId, toWarehouseId])
+  @@map("stock_transfers")
+}
+
+/// Per-organization transfer-number counter, mirroring `OrderSequence`.
+model StockTransferSequence {
+  organizationId String   @id @map("organization_id") @db.Uuid
+  lastNumber     Int      @default(0) @map("last_number")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("stock_transfer_sequences")
+}
+
+/// Append-only stock ledger.
+///
+/// `quantity` is the signed change that was applied; `quantityBefore` and
+/// `quantityAfter` are the balance of `(productId, warehouseId)` either side of
+/// it. Together they form an audit trail that can be replayed: the first
+/// movement's `quantityBefore` plus every subsequent `quantity` must reproduce
+/// the current `InventoryStock`.
+///
+/// The two partial unique constraints are the idempotency guards for order
+/// integration and transfers. A `NULL` in the leading column never conflicts
+/// with another `NULL` (Postgres treats NULLs as distinct), so ordinary receipts
+/// and manual adjustments are unlimited, while the order-driven rows — which
+/// must be written at most once each — cannot be duplicated.
+model StockMovement {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  organizationId String            @map("organization_id") @db.Uuid
+  productId      String            @map("product_id") @db.Uuid
+  warehouseId    String            @map("warehouse_id") @db.Uuid
+  type           StockMovementType
+  /// Signed change applied to the warehouse balance.
+  quantity       Int
+  quantityBefore Int               @map("quantity_before")
+  quantityAfter  Int               @map("quantity_after")
+  reason         String?
+  /// The order this movement belongs to, for `ORDER_*` types.
+  orderId        String?           @map("order_id") @db.Uuid
+  /// The transfer this movement belongs to, for `TRANSFER_*` types.
+  transferId     String?           @map("transfer_id") @db.Uuid
+  /// The member who performed it. Nullable so history survives their removal.
+  userId         String?           @map("user_id") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  order        Order?         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  transfer     StockTransfer? @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  user         User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// At most one ORDER_DEDUCTION and one ORDER_RELEASE per product per
+  /// warehouse per order — the guard that makes charging an order twice
+  /// impossible.
+  @@unique([orderId, productId, warehouseId, type])
+  /// At most one TRANSFER_OUT and one TRANSFER_IN per product per warehouse per
+  /// transfer.
+  @@unique([transferId, productId, warehouseId, type])
+  @@index([organizationId, productId, createdAt])
+  @@index([organizationId, warehouseId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([orderId])
+  @@index([transferId])
+  @@map("stock_movements")
 }

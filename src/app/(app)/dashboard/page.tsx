@@ -5,10 +5,12 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { Card, CardBody, CardHeader } from '@/components/ui/card';
 import { getAuthorizationContext } from '@/lib/auth/session';
 import { formatCount } from '@/lib/customers/presentation';
+import { formatStock } from '@/lib/inventory/presentation';
 import { formatMoney } from '@/lib/orders/presentation';
 import { assertPermission, hasPermission } from '@/lib/rbac/guard';
 import { PERMISSIONS } from '@/lib/rbac/permissions';
 import { getCustomerStats } from '@/lib/services/customer.service';
+import { getInventoryStats } from '@/lib/services/inventory.service';
 import { getOrderStats } from '@/lib/services/order.service';
 
 export const metadata = { title: 'Dashboard' };
@@ -30,6 +32,9 @@ export default async function DashboardPage() {
 
   const canReadOrders = hasPermission(context!, PERMISSIONS.ORDERS_READ);
   const orderStats = canReadOrders ? await getOrderStats(context!) : null;
+
+  const canReadInventory = hasPermission(context!, PERMISSIONS.INVENTORY_READ);
+  const inventoryStats = canReadInventory ? await getInventoryStats(context!) : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -134,13 +139,63 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      <section aria-label="Inventory" className="space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-fg text-lg font-semibold tracking-tight">Inventory</h2>
+          {inventoryStats ? (
+            <Link href="/inventory" className="text-brand hover:text-fg text-sm">
+              View inventory
+            </Link>
+          ) : null}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          {inventoryStats ? (
+            <>
+              <StatCard
+                label="Total products"
+                description="Active catalogue entries."
+                value={formatCount(inventoryStats.totalProducts)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Total stock units"
+                description="Across every warehouse."
+                value={formatStock(inventoryStats.totalStockUnits)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Low-stock products"
+                description="At or below their reorder threshold."
+                value={formatCount(inventoryStats.lowStock)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Out-of-stock products"
+                description="Nothing on hand anywhere."
+                value={formatCount(inventoryStats.outOfStock)}
+                isPlaceholder={false}
+              />
+              <StatCard
+                label="Warehouses"
+                description="Active locations."
+                value={formatCount(inventoryStats.warehouses)}
+                isPlaceholder={false}
+              />
+            </>
+          ) : (
+            <StatCard label="Inventory" description="Requires the inventory:read permission." />
+          )}
+        </div>
+      </section>
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <TrendPanel />
         </div>
 
         <Card>
-          <CardHeader title="Getting started" description="Phase 3 delivered order management." />
+          <CardHeader title="Getting started" description="Phase 4 added inventory management." />
           <CardBody className="space-y-4 text-sm">
             <ul className="text-fg-muted space-y-2.5">
               {[
@@ -148,6 +203,7 @@ export default async function DashboardPage() {
                 'Customers are searchable, filterable and archived rather than deleted.',
                 'Orders carry a number, a workflow, an owner and a full activity trail.',
                 'Totals are recalculated on the server, so no figure can be typed in.',
+                'Products, warehouses and stock movements are all recorded and auditable.',
                 'Other modules report metrics as each phase ships.',
               ].map((item) => (
                 <li key={item} className="flex gap-2">

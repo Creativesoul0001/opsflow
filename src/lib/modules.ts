@@ -41,9 +41,8 @@ export const MODULES = [
     label: 'Inventory',
     href: '/inventory',
     permission: PERMISSIONS.INVENTORY_READ,
-    status: 'planned',
-    phase: 3,
-    summary: 'Products, stock levels and purchase orders.',
+    status: 'available',
+    summary: 'Products, stock levels and warehouses.',
   },
   {
     key: 'support',

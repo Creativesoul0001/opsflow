@@ -10,7 +10,9 @@
  * module in a later phase is mostly a matter of granting existing keys. Phase 2
  * (CRM) refined `customers` from a coarse read/write/delete trio into
  * `read`/`create`/`update`/`archive`/`assign` so archiving and assignment can be
- * withheld independently of ordinary editing.
+ * withheld independently of ordinary editing, and Phase 4 (Inventory) did the
+ * same thing for stock: a member who may correct a quantity is not necessarily
+ * one who may move it between warehouses.
  */
 export const PERMISSIONS = {
   DASHBOARD_READ: 'dashboard:read',
@@ -28,7 +30,13 @@ export const PERMISSIONS = {
   ORDERS_ASSIGN: 'orders:assign',
 
   INVENTORY_READ: 'inventory:read',
-  INVENTORY_WRITE: 'inventory:write',
+  INVENTORY_PRODUCT_CREATE: 'inventory:product:create',
+  INVENTORY_PRODUCT_UPDATE: 'inventory:product:update',
+  INVENTORY_PRODUCT_ARCHIVE: 'inventory:product:archive',
+  INVENTORY_CATEGORY_MANAGE: 'inventory:category:manage',
+  INVENTORY_WAREHOUSE_MANAGE: 'inventory:warehouse:manage',
+  INVENTORY_STOCK_ADJUST: 'inventory:stock:adjust',
+  INVENTORY_STOCK_TRANSFER: 'inventory:stock:transfer',
 
   SUPPORT_READ: 'support:read',
   SUPPORT_WRITE: 'support:write',
@@ -138,13 +146,49 @@ export const PERMISSION_CATALOG: readonly {
     key: PERMISSIONS.INVENTORY_READ,
     resource: 'inventory',
     action: 'read',
-    description: 'View inventory and stock levels',
+    description: 'View products, stock levels, warehouses and stock movements',
   },
   {
-    key: PERMISSIONS.INVENTORY_WRITE,
+    key: PERMISSIONS.INVENTORY_PRODUCT_CREATE,
     resource: 'inventory',
-    action: 'write',
-    description: 'Adjust stock and products',
+    action: 'product:create',
+    description: 'Create products and categories',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_PRODUCT_UPDATE,
+    resource: 'inventory',
+    action: 'product:update',
+    description: 'Edit products and categories',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_PRODUCT_ARCHIVE,
+    resource: 'inventory',
+    action: 'product:archive',
+    description: 'Archive products and categories',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_CATEGORY_MANAGE,
+    resource: 'inventory',
+    action: 'category:manage',
+    description: 'Create, rename and archive product categories',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_WAREHOUSE_MANAGE,
+    resource: 'inventory',
+    action: 'warehouse:manage',
+    description: 'Create, edit and archive warehouses',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_STOCK_ADJUST,
+    resource: 'inventory',
+    action: 'stock:adjust',
+    description: 'Record receipts and stock adjustments',
+  },
+  {
+    key: PERMISSIONS.INVENTORY_STOCK_TRANSFER,
+    resource: 'inventory',
+    action: 'stock:transfer',
+    description: 'Move stock between warehouses',
   },
 
   {

@@ -33,6 +33,7 @@ import {
   requireActiveMember,
   type AssignableMember,
 } from '@/lib/services/members.service';
+import { deductOrderStock, releaseOrderStock } from '@/lib/services/stock.service';
 
 const log = logger.child('orders');
 
@@ -403,6 +404,50 @@ function isOrderNumberCollision(error: unknown): boolean {
   return text.includes('organization_id') || text.includes('order_number');
 }
 
+/**
+ * Confirms every line's `productId` is a live product in this organization.
+ *
+ * Tenant integrity first: the id arrives from a client, and `users`/`products`
+ * are both global tables, so a member could otherwise attach an order line to
+ * another tenant's product. The stock deduction would then silently refuse it at
+ * confirmation time with a confusing message, and the order would have been
+ * written pointing at stock that is not ours.
+ *
+ * The lookup is a single query for the whole order, so an order with a hundred
+ * lines still performs one round trip. Lines that price an ad-hoc service have
+ * no product at all and are not checked — that is why stock deduction is
+ * per-product rather than per-line.
+ */
+async function requireOrderableProducts(
+  organizationId: string,
+  items: ReadonlyArray<{ productId?: string | null; productName: string }>,
+  client: Prisma.TransactionClient | typeof db = db,
+): Promise<void> {
+  const ids = [
+    ...new Set(items.map((item) => item.productId).filter((id) => id != null)),
+  ] as string[];
+
+  if (ids.length === 0) return;
+
+  const found = await client.product.findMany({
+    where: { id: { in: ids }, organizationId, archivedAt: null },
+    select: { id: true },
+  });
+
+  const known = new Set(found.map((product) => product.id));
+
+  for (const item of items) {
+    if (item.productId && !known.has(item.productId)) {
+      throw new ValidationError([
+        {
+          path: '(items)',
+          message: `The item "${item.productName}" refers to a product that is not in this organization's catalogue.`,
+        },
+      ]);
+    }
+  }
+}
+
 /** Lists orders for the caller's organization with search, filters and paging. */
 export async function listOrders(
   context: AuthorizationContext,
@@ -453,6 +498,8 @@ export async function createOrder(
 
   const row = await withOrderNumberRetry(() =>
     db.$transaction(async (tx) => {
+      await requireOrderableProducts(context.organizationId, input.items, tx);
+
       const orderId = await writeOrder(tx, {
         context,
         order: null,
@@ -515,6 +562,10 @@ export async function updateOrder(
 
     const customerId = input.customerId ?? existing.customerId;
     const customer = await requireOrderableCustomer(context.organizationId, customerId, tx);
+
+    if (input.items !== undefined) {
+      await requireOrderableProducts(context.organizationId, input.items, tx);
+    }
 
     // `!== undefined`, not `??`: a cleared field arrives as `null`, which must
     // become zero rather than fall back to the value it was meant to clear.
@@ -618,11 +669,30 @@ export async function changeOrderStatus(
       select: ORDER_SELECT,
     });
 
+    // Phase 4 inventory hook. Confirming an order is the point the
+    // organization commits to the sale, so the units leave the warehouse here
+    // rather than when shipping catches up. This runs inside the same
+    // transaction as the status change, so a cancellation by insufficient stock
+    // leaves the order exactly as it was — see `stock.service.ts` for the full
+    // policy and the idempotency rules.
+    let stockNote = '';
+    if (status === OrderStatus.CONFIRMED) {
+      const effect = await deductOrderStock(tx, context, {
+        id: existing.id,
+        orderNumber: existing.orderNumber,
+        items: existing.items,
+      });
+
+      if (effect.units > 0) {
+        stockNote = ` ${effect.units} unit${effect.units === 1 ? '' : 's'} of stock deducted.`;
+      }
+    }
+
     await recordActivity(tx, {
       context,
       orderId: existing.id,
       type: OrderActivityType.STATUS_CHANGED,
-      description: `Order status changed from ${ORDER_STATUS_LABELS[from]} to ${ORDER_STATUS_LABELS[status]} by ${context.name}.`,
+      description: `Order status changed from ${ORDER_STATUS_LABELS[from]} to ${ORDER_STATUS_LABELS[status]} by ${context.name}.${stockNote}`,
     });
 
     return updated;
@@ -669,13 +739,31 @@ export async function cancelOrder(
       select: ORDER_SELECT,
     });
 
+    // Phase 4 inventory hook: stock is released only for an order that had
+    // actually deducted any. Cancelling a still-PENDING order therefore moves no
+    // stock at all, and the movement ledger keeps `ORDER_RELEASE` rows paired
+    // one-to-one with the `ORDER_DEDUCTION` rows they reverse. The effect is
+    // idempotent, so a retried cancellation cannot restore stock twice.
+    let stockNote = '';
+    if (from !== OrderStatus.PENDING) {
+      const effect = await releaseOrderStock(tx, context, {
+        id: existing.id,
+        orderNumber: existing.orderNumber,
+        items: existing.items,
+      });
+
+      if (effect.units > 0) {
+        stockNote = ` ${effect.units} unit${effect.units === 1 ? '' : 's'} of stock released.`;
+      }
+    }
+
     await recordActivity(tx, {
       context,
       orderId: existing.id,
       type: OrderActivityType.CANCELLED,
       description: reason
-        ? `Order cancelled by ${context.name}. Reason: ${reason}`
-        : `Order cancelled by ${context.name}.`,
+        ? `Order cancelled by ${context.name}. Reason: ${reason}${stockNote}`
+        : `Order cancelled by ${context.name}.${stockNote}`,
     });
 
     return updated;
