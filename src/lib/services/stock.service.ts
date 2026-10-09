@@ -250,21 +250,34 @@ async function requireActiveWarehouse(
   warehouseId: string,
   path: string,
 ): Promise<{ id: string; code: string; name: string }> {
-  const rows = await tx.$queryRaw<Array<{ id: string; code: string; name: string }>>(Prisma.sql`
-    SELECT "id", "code", "name" FROM "warehouses"
+  // The lookup deliberately does not filter on `archived_at`, so an id the
+  // organization *used* to have can be told apart from one it never had. The
+  // message matters: "that warehouse is archived, pick another" tells the member
+  // what to do, while "does not exist" would leave them hunting for a typo that
+  // is not there.
+  const rows = await tx.$queryRaw<
+    Array<{ id: string; code: string; name: string; archivedAt: Date | null }>
+  >(Prisma.sql`
+    SELECT "id", "code", "name", "archived_at" AS "archivedAt" FROM "warehouses"
       WHERE "id" = ${warehouseId}::uuid
         AND "organization_id" = ${organizationId}::uuid
-        AND "archived_at" IS NULL
   `);
 
   const warehouse = rows[0];
+
   if (!warehouse) {
     throw new ValidationError([
       { path, message: 'That warehouse does not exist in this organization.' },
     ]);
   }
 
-  return warehouse;
+  if (warehouse.archivedAt) {
+    throw new ValidationError([
+      { path, message: 'That warehouse is archived. Choose an active one.' },
+    ]);
+  }
+
+  return { id: warehouse.id, code: warehouse.code, name: warehouse.name };
 }
 
 // ---------------------------------------------------------------------------

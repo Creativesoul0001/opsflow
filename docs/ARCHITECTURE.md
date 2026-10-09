@@ -1,9 +1,9 @@
-# OpsFlow — Architecture (Phases 1–3)
+# OpsFlow — Architecture (Phases 1–4)
 
-This document explains the structural decisions behind the platform, the
-Customers CRM module and the Orders module: how multi-tenancy is modelled,
-where the trust boundary sits, how requests flow through the layers, and what
-each folder is responsible for.
+This document explains the structural decisions behind the platform and the
+Customers, Orders and Inventory modules: how multi-tenancy is modelled, where the
+trust boundary sits, how requests flow through the layers, and what each folder
+is responsible for.
 
 For setup instructions see the [README](../README.md).
 
@@ -40,10 +40,20 @@ PostgreSQL
 ```
 
 **Why this matters:** route handlers contain no business logic and services
-contain no HTTP concerns. Phase 2 (Customers) and Phase 3 (Orders) both followed
-this exact path — a service under `services/` and a route handler that only
-wires the layers together — which is the repeatable recipe for every future
-module (§8).
+contain no HTTP concerns. Phase 2 (Customers), Phase 3 (Orders) and Phase 4
+(Inventory) all followed this exact path — a service under `services/` and a
+route handler that only wires the layers together — which is the repeatable
+recipe for every future module (§8).
+
+### The Inventory module's extra layer
+
+Inventory adds one module the earlier phases did not need: a pure library layer
+(`src/lib/inventory/`) holding the rules that decide _what a legal stock change
+is_. `validation.ts` parses and narrows input, `query.ts` builds tenant-scoped
+`where` clauses, and `stock-levels.ts` performs the "summed quantity against the
+product's own threshold" comparison that Prisma cannot express. None of them
+imports the database client, so they are unit tested against a real Postgres
+only where a database is unavoidable.
 
 ---
 
@@ -128,15 +138,38 @@ Every future business model (Customer, Order, Product, Ticket, …) **must**:
 
 ### Roles
 
-| Role       | Scope                                                                     |
-| ---------- | ------------------------------------------------------------------------- |
-| `OWNER`    | Everything, including permanent organization deletion                     |
-| `ADMIN`    | All but `organization:delete`                                             |
-| `MANAGER`  | Day-to-day ops; no finance writes, member/role management, or settings    |
-| `EMPLOYEE` | Read customers/orders/inventory + support; no destructive or admin powers |
+| Role       | Scope                                                                  |
+| ---------- | ---------------------------------------------------------------------- |
+| `OWNER`    | Everything, including permanent organization deletion                  |
+| `ADMIN`    | All but `organization:delete`                                          |
+| `MANAGER`  | Day-to-day ops; no finance writes, member/role management, or settings |
+| `EMPLOYEE` | Read customers/orders/inventory, adjust stock, handle support          |
 
 The privilege ladder (OWNER ⊃ ADMIN ⊃ MANAGER ⊃ EMPLOYEE) is asserted in
 `tests/rbac.test.ts`.
+
+### Inventory permissions (Phase 4)
+
+The coarse `inventory:read` / `inventory:write` pair Phase 1 reserved was split
+when the module was actually built, for the same reason CRM split
+`customers:write` into `create`/`update`/`archive`: a member who may correct a
+quantity is not necessarily one who may move stock between warehouses, and
+certainly not one who may retire the catalogue.
+
+| Key                          | Grants                                     |
+| ---------------------------- | ------------------------------------------ |
+| `inventory:read`             | See products, stock, warehouses, movements |
+| `inventory:product:create`   | Add catalogue entries and categories       |
+| `inventory:product:update`   | Edit catalogue entries and categories      |
+| `inventory:product:archive`  | Archive products                           |
+| `inventory:category:manage`  | Create, rename, archive categories         |
+| `inventory:warehouse:manage` | Create, edit, promote, archive warehouses  |
+| `inventory:stock:adjust`     | Receipts and signed adjustments            |
+| `inventory:stock:transfer`   | Move stock between warehouses              |
+
+`MANAGER` holds everything except `product:archive`; `EMPLOYEE` holds `read` and
+`stock:adjust` only. The seed script reconciles these keys idempotently and
+prunes anything no longer in `PERMISSION_CATALOG`.
 
 ---
 
@@ -219,6 +252,83 @@ The business modules built on it, however, follow the same conventions.
 - Single-record lookups are `findFirst` on `(id, organizationId)` and return
   the same 404 for a missing id as for someone else's id, so existence is never
   leaked across tenants.
+
+### Endpoints (Inventory)
+
+| Method | Path                       | Permission                   | Purpose                                  |
+| ------ | -------------------------- | ---------------------------- | ---------------------------------------- |
+| GET    | `/api/products`            | `inventory:read`             | List, search, filter, sort, paginate     |
+| POST   | `/api/products`            | `inventory:product:create`   | Create a catalogue entry                 |
+| GET    | `/api/products/:id`        | `inventory:read`             | Detail with per-warehouse balances       |
+| PATCH  | `/api/products/:id`        | `inventory:product:update`   | Edit catalogue fields                    |
+| DELETE | `/api/products/:id`        | `inventory:product:archive`  | Archive (never delete)                   |
+| GET    | `/api/categories`          | `inventory:read`             | The organization's categories            |
+| POST   | `/api/categories`          | `inventory:category:manage`  | Create a grouping                        |
+| PATCH  | `/api/categories/:id`      | `inventory:category:manage`  | Rename or re-describe                    |
+| DELETE | `/api/categories/:id`      | `inventory:category:manage`  | Archive (products become uncategorised)  |
+| GET    | `/api/warehouses`          | `inventory:read`             | List with unit totals                    |
+| POST   | `/api/warehouses`          | `inventory:warehouse:manage` | Create; first becomes primary            |
+| GET    | `/api/warehouses/:id`      | `inventory:read`             | Detail with held stock                   |
+| PATCH  | `/api/warehouses/:id`      | `inventory:warehouse:manage` | Edit, or promote to primary              |
+| DELETE | `/api/warehouses/:id`      | `inventory:warehouse:manage` | Archive                                  |
+| POST   | `/api/stock/receipts`      | `inventory:stock:adjust`     | Record stock arriving (positive only)    |
+| POST   | `/api/stock/adjustments`   | `inventory:stock:adjust`     | Signed correction; reason mandatory      |
+| POST   | `/api/stock/transfers`     | `inventory:stock:transfer`   | Move between two warehouses              |
+| GET    | `/api/stock/movements`     | `inventory:read`             | The stock ledger, filtered and paginated |
+| GET    | `/api/inventory/stats`     | `inventory:read`             | Dashboard counts                         |
+| GET    | `/api/inventory/low-stock` | `inventory:read`             | The reorder report                       |
+
+`/api/products` and `/api/warehouses` have no `:id` variant of their own beyond
+`[id]/route.ts`, and no static segment (such as `/api/products/low-stock`) exists
+below a dynamic `[id]`, so route matching never has to guess.
+
+### Stock movement rules
+
+- **Every change is recorded.** No balance moves without a `StockMovement` row in
+  the same transaction. `quantityBefore` and `quantityAfter` make the ledger
+  replayable: the first movement's `quantityBefore` plus every `quantity`
+  reproduces the current balance.
+- **Rows are locked before they are written.** `SELECT ... FOR UPDATE` on the
+  product row first, then on its stock rows, always taken in the same order. Two
+  simultaneous adjustments therefore serialize instead of both reading the same
+  starting quantity and losing one write. This is the reason a second adjustment
+  during a race cannot silently drop.
+- **Balances never go negative.** The check runs before the movement is written,
+  so the member sees a field-level error; the database's own `CHECK
+(quantity >= 0)` is the backstop beneath it.
+- **Transfers are two rows, one transaction.** `TRANSFER_OUT` and `TRANSFER_IN`
+  commit together, so an organization's total stock is conserved and neither
+  side can exist without the other.
+- **Receipts are positive; adjustments may be negative.** A receipt with a
+  negative quantity would let a sign mistake silently destroy stock, so the
+  correction path is an adjustment with a mandatory reason on the ledger.
+
+### Order ↔ inventory policy
+
+| Event                                  | Stock effect                                         |
+| -------------------------------------- | ---------------------------------------------------- |
+| Order created                          | none — a commitment, units are still on hand         |
+| Order edited (PENDING/CONFIRMED)       | none — deduction happens on confirmation, once       |
+| Order **CONFIRMED**                    | deducted, primary warehouse first, then the fullest  |
+| Confirmation with insufficient stock   | order stays PENDING; nothing moves (one transaction) |
+| Order **CANCELLED** after confirmation | exactly what was deducted is released                |
+| Order **CANCELLED** while PENDING      | nothing to release — no movement                     |
+| PROCESSING / SHIPPED / DELIVERED       | none — fulfilment tracking only                      |
+
+Both effects are **idempotent**: a retried confirmation writes no second
+`ORDER_DEDUCTION`, a retried cancellation writes no second `ORDER_RELEASE`. The
+`deductOrderStock` / `releaseOrderStock` functions check for an existing movement
+first, and two partial unique indexes — `(orderId, productId, warehouseId, type)`
+and `(transferId, productId, warehouseId, type)` — enforce it at the database
+level, where a NULL in the leading column never conflicts with another NULL and
+so leaves receipts and manual adjustments unlimited.
+
+Both effects run **inside the order's own transaction** (`changeOrderStatus`,
+`cancelOrder`), so a confirmation that fails on insufficient stock rolls the
+status change back with it and leaves the order exactly as it was. The caller
+needs `orders:update` (or `orders:cancel`); it does not need any inventory
+permission, because the deduction is a consequence of the order workflow rather
+than a separate inventory action.
 
 ---
 

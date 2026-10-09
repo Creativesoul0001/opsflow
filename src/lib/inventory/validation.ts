@@ -196,9 +196,15 @@ export const updateProductSchema = z
       .optional(),
     description: optionalText(MAX_DESCRIPTION, 'Description'),
     categoryId: uuidSchema.nullable().optional(),
-    unitPrice: optionalMoney.transform((value) =>
-      value === null || value === undefined ? undefined : minorUnits(value, 'Unit price'),
-    ),
+    // Money arrives as a decimal string and becomes integer minor units, so the
+    // wire contract matches Orders exactly. The trailing `.optional()` matters:
+    // a `.transform()` inside a chain otherwise collapses to "key required, value
+    // possibly undefined", which would force every PATCH to resend a price.
+    unitPrice: optionalMoney
+      .transform((value) =>
+        value === null || value === undefined ? undefined : minorUnits(value, 'Unit price'),
+      )
+      .optional(),
     costPrice: z
       .string()
       .trim()

@@ -6,14 +6,14 @@ OpsFlow is a multi-tenant business operations SaaS: a single platform for
 managing customers, orders, inventory, support, finance, analytics and
 automation, with every record scoped to the organization that owns it.
 
-This repository contains **Phases 1–3**: the production-grade foundation
+This repository contains **Phases 1–4**: the production-grade foundation
 (database schema, authentication, role-based authorization, a consistent REST
 API, an application shell and the test/lint/build toolchain), the **Customers**
-CRM module and the **Orders** module. Both modules are fully implemented —
-every record is scoped to the owning organization, served through
-permission-checked REST APIs, and presented in the shell with list, detail and
-create/edit pages. The remaining modules (settings, inventory, support,
-finance, analytics, automation, AI) are not implemented yet.
+CRM module, the **Orders** module and the **Inventory** module. Every record is
+scoped to the owning organization, served through permission-checked REST APIs,
+and presented in the shell with list, detail and create/edit pages. The
+remaining modules (settings, support, finance, analytics, automation, AI) are
+not implemented yet.
 
 ---
 
@@ -100,9 +100,9 @@ including the multi-tenancy model and request flow.
 │       ├── api/               # errors.ts, responses.ts
 │       ├── auth/              # config.ts, password.ts, session.ts
 │       ├── client/            # client fetch helper + ApiRequestError
+│       ├── inventory/         # validation, query, stock-levels, presentation
 │       ├── rbac/              # permissions.ts, roles.ts, guard.ts
-│       ├── services/          # auth, organization, customer, order services
-│       ├── orders/            # money, calculation, status, number, validation, query
+│       ├── services/          # auth, organization, customer, order, inventory, stock
 │       ├── db.ts  env.ts  logger.ts  modules.ts  rate-limit.ts  validation.ts
 │       └── tenancy.ts         # membership/authorization resolution
 ├── tests/
@@ -221,7 +221,33 @@ npm run db:studio     # browse data in Prisma Studio
 - **OrderActivity** — immutable audit timeline recording creates, edits, status
   changes, assignments, cancellations and notes
 
+**Phase 4 (Inventory):**
+
+- **ProductCategory** — `organizationId` FK; unique name per organization;
+  optional description; archived rather than deleted
+- **Product** — `organizationId` FK + index; unique `(organizationId, sku)`;
+  optional category, selling `unitPrice` and `costPrice` (both integer minor
+  units), a `reorderThreshold`, a `unit` label and an ACTIVE/ARCHIVED status
+- **Warehouse** — `organizationId` FK + index; unique `(organizationId, code)`;
+  optional address fields; exactly one primary per organization; multiple
+  warehouses per organization are supported
+- **InventoryStock** — one row per product per warehouse; the `quantity` on hand;
+  unique `(productId, warehouseId)`
+- **StockTransfer** — a completed move between two warehouses of the same
+  organization, numbered `TR-######` per organization
+- **StockTransferSequence** — per-organization counter, mirroring
+  `OrderSequence`
+- **StockMovement** — the append-only ledger. Every quantity change writes one
+  row recording the signed `quantity`, the `quantityBefore` and `quantityAfter`
+  balance, a `reason`, the acting user, and — when relevant — the `orderId` or
+  `transferId` that caused it. Two partial unique indexes
+  (`(orderId, productId, warehouseId, type)` and
+  `(transferId, productId, warehouseId, type)`) make order- and transfer-driven
+  writes idempotent.
+
 IDs are UUIDv7. Timestamps use `@default(now())` / `@updatedAt` throughout.
+Monetary values are integer minor units, exactly as in Orders; stock quantities
+are whole numbers of `Product.unit`, so no rounding is ever introduced.
 
 ---
 
@@ -252,11 +278,20 @@ IDs are UUIDv7. Timestamps use `@default(now())` / `@updatedAt` throughout.
 
 - **Unit / integration (Vitest)** — `tests/*.test.ts`. Covers validation, RBAC
   hierarchy + guards, tenancy boundaries, error taxonomy, password hashing and
-  log redaction, plus the pure business logic (customer and order
-  money/calculation/status/number/validation/query). The order and customer
-  service suites run against a real Postgres; runs are serialized per file to
-  keep each file on its own pooled connection (see `vitest.config.mts`).
+  log redaction, plus the pure business logic (inventory query construction and
+  validation; customer and order money/calculation/status/number/query).
   `server-only` is stubbed for the Node test runner.
+- **Database-backed (Vitest)** — `customers-service.test.ts`,
+  `orders-service.test.ts`, `inventory-service.test.ts` and
+  `order-inventory-integration.test.ts`. These prove the claims that need a real
+  Postgres: per-tenant sequence allocation, money round-tripping as the same
+  decimal string, concurrent stock updates never losing a write, the unique
+  indexes refusing a second deduction or release, cross-organization denial, and
+  the order/inventory policy (deduct on confirm, release on cancel, idempotent
+  on retry). They skip automatically when `DATABASE_URL` is absent, so
+  `npm run verify` stays hermetic. Vitest runs test files one at a time
+  (`fileParallelism: false`) because two suites opening their own pools at once
+  drive the shared connection into a protocol desync.
 - **E2E (Playwright)** — `tests/e2e/auth.spec.ts`, `customers.spec.ts` and
   `orders.spec.ts`. They cover the register → sign-in → dashboard → sign-out
   flow, a full customer lifecycle (create, search, edit, note, archive) and a
@@ -273,11 +308,11 @@ npm run verify       # the full gate: typecheck + lint + test + build
 
 ---
 
-## What exists (Phases 1–3)
+## What exists (Phases 1–4)
 
 **Phase 1 — foundation:** multi-tenant data model (User → Membership →
 Organization) with tenant scoping; auth (registration, login, logout, bcrypt,
-JWT sessions, protected routes); RBAC (4 roles, 25 permissions, server-side
+JWT sessions, protected routes); RBAC (4 roles, 35 permissions, server-side
 guards); REST foundation (health/me/auth endpoints, Zod validation, centralized
 errors, structured logging, rate limiting); application shell with loading /
 error / empty states and an honest dashboard; tooling (strict TS, ESLint,
@@ -294,10 +329,42 @@ notes along an immutable activity timeline; a list with search/filter/sort and
 pagination; a detail page with the line-item table and totals; and dashboard
 order statistics (total, pending, processing, delivered, cancelled, value).
 
+**Phase 4 — Inventory:** product and category CRUD with archiving; multiple
+warehouses per organization with a single primary; stock receipts, signed
+adjustments with a mandatory reason, and inter-warehouse transfers; an
+append-only movement ledger recording every change with before/after balances;
+low-stock and out-of-stock reports; a full inventory UI under `/inventory`; and
+real dashboard inventory statistics.
+
+### Order ↔ inventory policy
+
+The two modules are joined by one rule set, documented in full in
+`src/lib/services/stock.service.ts`:
+
+| Event                                  | Stock effect                                                 |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Order created                          | none — an order is a commitment, the units are still on hand |
+| Order edited (while PENDING/CONFIRMED) | none — the deduction happens on confirmation, once           |
+| Order **CONFIRMED**                    | deducted, from the primary warehouse first, then the fullest |
+| Confirmation with insufficient stock   | order stays PENDING, nothing moves (one transaction)         |
+| Order **CANCELLED** (was confirmed)    | exactly what was deducted is released                        |
+| Order **CANCELLED** (was PENDING)      | nothing to release — no movement                             |
+| PROCESSING / SHIPPED / DELIVERED       | none — fulfilment tracking only                              |
+
+Deduction and release are **idempotent**: a retried confirmation writes no
+second `ORDER_DEDUCTION`, and a retried cancellation writes no second
+`ORDER_RELEASE`. Two partial unique indexes on `stock_movements` enforce this at
+the database level, and both effects ride inside the order's own transaction, so
+a failed confirmation leaves the order and the stock exactly as they were.
+
+Later transitions ship or deliver a cancelled order no longer being possible:
+`DELIVERED` and `CANCELLED` are terminal, so stock can never be released for an
+order that has already been dispatched.
+
 ## Future phases (not implemented)
 
 - **Settings** — members, roles, organization profile
-- **Inventory, Support, Finance, Analytics, Automation, AI Assistant**
+- **Support, Finance, Analytics, Automation, AI Assistant**
   (background jobs will use Redis)
 
 ---
